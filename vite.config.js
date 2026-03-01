@@ -61,4 +61,8 @@ export default defineConfig({
   server: {
     middlewareMode: false,
   },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+  }
 });
