@@ -1,0 +1,99 @@
+{
+  "projects": [
+    {
+      "id": "mm457g4t2wqqsz8f0qd",
+      "name": "Palm & Plate",
+      "totalValue": 500,
+      "payments": [
+        {
+          "id": "mm4581opwydhkb1dvqn",
+          "amount": 250,
+          "date": "2026-02-27",
+          "note": "50% initial payment"
+        }
+      ],
+      "expenses": [
+        {
+          "id": "mm458h9t4nrkx3r1v0n",
+          "amount": 38,
+          "date": "2026-02-27",
+          "description": "claude"
+        }
+      ],
+      "createdAt": "2026-02-27T00:17:11.789Z"
+    },
+    {
+      "id": "mm45adyzlojcwbhdjh",
+      "name": "Aljawhara",
+      "totalValue": 1500,
+      "payments": [
+        {
+          "id": "mm45alhcjt0tifq7mqh",
+          "amount": 750,
+          "date": "2026-02-27",
+          "note": "50% down"
+        },
+        {
+          "id": "mm45c02gnxxggahlap",
+          "amount": 750,
+          "date": "2026-02-27",
+          "note": ""
+        }
+      ],
+      "expenses": [
+        {
+          "id": "mm45arvtsl5vkpzh2wp",
+          "amount": 38,
+          "date": "2026-02-27",
+          "description": "claude"
+        }
+      ],
+      "createdAt": "2026-02-27T00:19:28.955Z"
+    },
+    {
+      "id": "mm45lq1h5vhc5atv5ah",
+      "name": "Calo product",
+      "totalValue": 8000,
+      "payments": [
+        {
+          "id": "mm45lvdpb5kq44pvqfi",
+          "amount": 4000,
+          "date": "2026-02-27",
+          "note": ""
+        }
+      ],
+      "expenses": [],
+      "createdAt": "2026-02-27T00:28:17.813Z"
+    },
+    {
+      "id": "mm45mvdonu3k05eovx",
+      "name": "Storytelling site",
+      "totalValue": 2500,
+      "payments": [
+        {
+          "id": "mm45n0boy5uitmxxkm",
+          "amount": 2500,
+          "date": "2026-02-27",
+          "note": ""
+        }
+      ],
+      "expenses": [],
+      "createdAt": "2026-02-27T00:29:11.388Z"
+    }
+  ],
+  "bankSpending": [
+    {
+      "id": "mm45951le3bdx78o6rm",
+      "amount": 5,
+      "date": "2026-02-27",
+      "description": "sponsoring a post"
+    },
+    {
+      "id": "mm45ccmgzgxlxubb6wa",
+      "amount": 10,
+      "date": "2026-02-27",
+      "description": "more paid ads"
+    }
+  ],
+  "charitySpending": []
+}
