@@ -62,7 +62,7 @@ export default defineConfig({
     middlewareMode: false,
   },
   build: {
-    outDir: 'dist',
+    outDir: "dist",
     sourcemap: false,
-  }
+  },
 });
