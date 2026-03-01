@@ -40,10 +40,21 @@ function dbPlugin() {
           })
         }
       })
+      
+      // Fix MIME type issues for module scripts
+      server.middlewares.use((req, res, next) => {
+        if (req.url.endsWith('.jsx') || req.url.endsWith('.js')) {
+          res.setHeader('Content-Type', 'application/javascript')
+        }
+        next()
+      })
     }
   }
 }
 
 export default defineConfig({
-  plugins: [react(), dbPlugin()]
+  plugins: [react(), dbPlugin()],
+  server: {
+    middlewareMode: false
+  }
 })
