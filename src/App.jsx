@@ -1679,11 +1679,16 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <Sidebar />
       <main className="main-content">
         <div className="mobile-header">
-          <button 
+          <button
             className="hamburger-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
             aria-label="Toggle menu"
