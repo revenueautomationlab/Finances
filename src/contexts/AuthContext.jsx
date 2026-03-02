@@ -23,9 +23,7 @@ export function AuthProvider({ children }) {
           } else {
             // User logged in but not authorized - sign them out
             await supabase.auth.signOut();
-            setError(
-              "Access denied. Only revenueautomationlab@gmail.com can access this app.",
-            );
+            setError("Access denied.");
             setUser(null);
           }
         }
@@ -50,9 +48,7 @@ export function AuthProvider({ children }) {
           setError(null);
         } else {
           await supabase.auth.signOut();
-          setError(
-            "Access denied. Only revenueautomationlab@gmail.com can access this app.",
-          );
+          setError("Access denied.");
           setUser(null);
         }
       } else {
@@ -88,8 +84,14 @@ export function AuthProvider({ children }) {
       await supabase.auth.signOut();
       setUser(null);
     } catch (err) {
-      console.error("Logout error:", err);
-      setError(err.message);
+      // Ignore 403 errors (user already logged out from Supabase perspective)
+      if (err.status === 403) {
+        setUser(null);
+        console.log("User already logged out");
+      } else {
+        console.error("Logout error:", err);
+        setError(err.message);
+      }
     }
   };
 

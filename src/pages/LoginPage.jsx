@@ -56,11 +56,6 @@ export default function LoginPage() {
             </svg>
             {loading ? "Signing in..." : "Sign in with Google"}
           </button>
-
-          <div className="login-note">
-            <p>To access this application, you must sign in with:</p>
-            <code>revenueautomationlab@gmail.com</code>
-          </div>
         </div>
 
         <div className="login-footer">
@@ -178,29 +173,6 @@ export default function LoginPage() {
         .login-button:disabled {
           opacity: 0.7;
           cursor: not-allowed;
-        }
-
-        .login-note {
-          background: #edf2f7;
-          padding: 15px;
-          border-radius: 8px;
-          font-size: 13px;
-          color: #2d3748;
-        }
-
-        .login-note p {
-          margin: 0 0 8px 0;
-        }
-
-        .login-note code {
-          background: white;
-          padding: 6px 10px;
-          border-radius: 4px;
-          font-family: 'Courier New', monospace;
-          font-size: 12px;
-          display: block;
-          color: #667eea;
-          font-weight: 600;
         }
 
         .login-footer {

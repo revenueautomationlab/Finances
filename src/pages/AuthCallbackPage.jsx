@@ -4,13 +4,19 @@ import { useAuth } from "../contexts/AuthContext";
 
 export default function AuthCallbackPage() {
   const navigate = useNavigate();
-  const { user, loading } = useAuth();
+  const { user, loading, error } = useAuth();
 
   useEffect(() => {
-    if (!loading && user) {
-      navigate("/");
+    if (!loading) {
+      if (error) {
+        // If there's an error, redirect to login to show the error message
+        navigate("/login", { replace: true });
+      } else if (user) {
+        // If user is authenticated, go to home
+        navigate("/", { replace: true });
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, loading, error, navigate]);
 
   return (
     <div
