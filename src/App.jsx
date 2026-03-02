@@ -277,6 +277,8 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   // Load data from Supabase on mount
   useEffect(() => {
@@ -293,9 +295,19 @@ export default function App() {
     loadData();
   }, []);
 
-  const showToast = (msg, type = "success") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 2500);
+  const showToast = (msg, type = "success", duration = 3000) => {
+    setToast({ msg, type, id: Date.now() });
+    setTimeout(() => setToast(null), duration);
+  };
+
+  const showConfirm = (title, message, action, onConfirm, isDangerous = false) => {
+    setConfirm({
+      title,
+      message,
+      action,
+      onConfirm,
+      isDangerous,
+    });
   };
 
   const refreshData = async () => {
@@ -357,129 +369,212 @@ export default function App() {
 
   // --- CRUD Operations ---
   const addProject = async (name, totalValue) => {
+    setLoading(true);
     try {
       await dbAddProject(name, totalValue);
       await refreshData();
-      showToast("Project created");
+      showToast(`✓ Project "${name}" created successfully`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to add project:", error);
-      showToast("Failed to create project", "error");
+      showToast(`✗ Failed to create project: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
   const editProject = async (id, name, totalValue) => {
+    setLoading(true);
     try {
       await dbUpdateProject(id, name, totalValue);
       await refreshData();
-      showToast("Project updated");
+      showToast(`✓ Project "${name}" updated successfully`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to update project:", error);
-      showToast("Failed to update project", "error");
+      showToast(`✗ Failed to update project: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deleteProject = async (id) => {
-    if (!confirm("Delete this project and all its data?")) return;
-    try {
-      await dbDeleteProject(id);
-      if (selectedProjectId === id) {
-        setSelectedProjectId(null);
-        setView("dashboard");
-      }
-      await refreshData();
-      showToast("Project deleted", "error");
-    } catch (error) {
-      console.error("Failed to delete project:", error);
-      showToast("Failed to delete project", "error");
-    }
+  const deleteProject = (id, name) => {
+    showConfirm(
+      "Delete Project",
+      `Are you sure you want to delete "${name}"? This action cannot be undone and will remove all payments and expenses.`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteProject(id);
+          if (selectedProjectId === id) {
+            setSelectedProjectId(null);
+            setView("dashboard");
+          }
+          await refreshData();
+          showToast(`✓ Project "${name}" deleted successfully`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete project:", error);
+          showToast(`✗ Failed to delete project: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const addPayment = async (projectId, amount, date, note) => {
+    setLoading(true);
     try {
       await dbAddPayment(projectId, amount, date, note);
       await refreshData();
-      showToast("Payment recorded");
+      showToast(`✓ Payment of ${currency(amount)} recorded`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to add payment:", error);
-      showToast("Failed to record payment", "error");
+      showToast(`✗ Failed to record payment: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deletePayment = async (projectId, paymentId) => {
-    try {
-      await dbDeletePayment(projectId, paymentId);
-      await refreshData();
-      showToast("Payment removed", "error");
-    } catch (error) {
-      console.error("Failed to delete payment:", error);
-      showToast("Failed to remove payment", "error");
-    }
+  const deletePayment = (projectId, paymentId, amount) => {
+    showConfirm(
+      "Delete Payment",
+      `Are you sure you want to delete this payment of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeletePayment(projectId, paymentId);
+          await refreshData();
+          showToast(`✓ Payment of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete payment:", error);
+          showToast(`✗ Failed to delete payment: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const addExpense = async (projectId, amount, date, description) => {
+    setLoading(true);
     try {
       await dbAddExpense(projectId, amount, date, description);
       await refreshData();
-      showToast("Expense recorded");
+      showToast(`✓ Expense of ${currency(amount)} recorded`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to add expense:", error);
-      showToast("Failed to record expense", "error");
+      showToast(`✗ Failed to record expense: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deleteExpense = async (projectId, expenseId) => {
-    try {
-      await dbDeleteExpense(projectId, expenseId);
-      await refreshData();
-      showToast("Expense removed", "error");
-    } catch (error) {
-      console.error("Failed to delete expense:", error);
-      showToast("Failed to remove expense", "error");
-    }
+  const deleteExpense = (projectId, expenseId, amount) => {
+    showConfirm(
+      "Delete Expense",
+      `Are you sure you want to delete this expense of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteExpense(projectId, expenseId);
+          await refreshData();
+          showToast(`✓ Expense of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete expense:", error);
+          showToast(`✗ Failed to delete expense: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const addBankSpending = async (amount, date, description) => {
+    setLoading(true);
     try {
       await dbAddBankSpending(amount, date, description);
       await refreshData();
-      showToast("Bank spending recorded");
+      showToast(`✓ Bank spending of ${currency(amount)} recorded`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to add bank spending:", error);
-      showToast("Failed to record spending", "error");
+      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deleteBankSpending = async (id) => {
-    try {
-      await dbDeleteBankSpending(id);
-      await refreshData();
-      showToast("Spending removed", "error");
-    } catch (error) {
-      console.error("Failed to delete bank spending:", error);
-      showToast("Failed to remove spending", "error");
-    }
+  const deleteBankSpending = (id, amount) => {
+    showConfirm(
+      "Delete Bank Spending",
+      `Are you sure you want to delete this bank spending of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteBankSpending(id);
+          await refreshData();
+          showToast(`✓ Bank spending of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete bank spending:", error);
+          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const addCharitySpending = async (amount, date, description) => {
+    setLoading(true);
     try {
       await dbAddCharitySpending(amount, date, description);
       await refreshData();
-      showToast("Charity spending recorded");
+      showToast(`✓ Charity spending of ${currency(amount)} recorded`, "success");
+      setModal(null);
     } catch (error) {
       console.error("Failed to add charity spending:", error);
-      showToast("Failed to record spending", "error");
+      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deleteCharitySpending = async (id) => {
-    try {
-      await dbDeleteCharitySpending(id);
-      await refreshData();
-      showToast("Spending removed", "error");
-    } catch (error) {
-      console.error("Failed to delete charity spending:", error);
-      showToast("Failed to remove spending", "error");
-    }
+  const deleteCharitySpending = (id, amount) => {
+    showConfirm(
+      "Delete Charity Spending",
+      `Are you sure you want to delete this charity spending of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteCharitySpending(id);
+          await refreshData();
+          showToast(`✓ Charity spending of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete charity spending:", error);
+          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const openProject = (id) => {
@@ -526,15 +621,15 @@ export default function App() {
               </div>
             ))}
             <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={onClose}>
+              <button type="button" className="btn btn-ghost" onClick={onClose} disabled={loading}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
-                {title.startsWith("Edit")
+              <button type="submit" className="btn btn-primary" disabled={loading}>
+                {loading ? "Processing..." : (title.startsWith("Edit")
                   ? "Update"
                   : title.startsWith("Spend")
                     ? "Record"
-                    : "Add"}
+                    : "Add")}
               </button>
             </div>
           </form>
@@ -1019,7 +1114,7 @@ export default function App() {
                         className="btn btn-danger-ghost btn-sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteProject(p.id);
+                          deleteProject(p.id, p.name);
                         }}
                       >
                         {Icons.trash}
@@ -1089,7 +1184,7 @@ export default function App() {
             </button>
             <button
               className="btn btn-danger-ghost"
-              onClick={() => deleteProject(p.id)}
+              onClick={() => deleteProject(p.id, p.name)}
             >
               {Icons.trash} <span>Delete</span>
             </button>
@@ -1247,7 +1342,7 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deletePayment(p.id, pay.id)}
+                          onClick={() => deletePayment(p.id, pay.id, pay.amount)}
                         >
                           {Icons.trash}
                         </button>
@@ -1331,7 +1426,7 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteExpense(p.id, exp.id)}
+                          onClick={() => deleteExpense(p.id, exp.id, exp.amount)}
                         >
                           {Icons.trash}
                         </button>
@@ -1461,7 +1556,7 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteBankSpending(s.id)}
+                          onClick={() => deleteBankSpending(s.id, s.amount)}
                         >
                           {Icons.trash}
                         </button>
@@ -1618,7 +1713,7 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteCharitySpending(s.id)}
+                          onClick={() => deleteCharitySpending(s.id, s.amount)}
                         >
                           {Icons.trash}
                         </button>
@@ -1705,7 +1800,73 @@ export default function App() {
         {view === "charity" && <CharityView />}
       </main>
       {modal && <ModalForm {...modal} onClose={() => setModal(null)} />}
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {/* Enhanced Toast */}
+      {toast && (
+        <div className={`toast toast-${toast.type}`}>
+          <div className="toast-content">
+            {toast.type === "success" ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+              </svg>
+            )}
+            <span>{toast.msg}</span>
+          </div>
+        </div>
+      )}
+      {/* Confirmation Dialog */}
+      {confirm && (
+        <div className="modal-overlay" onClick={() => !loading && setConfirm(null)}>
+          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{confirm.title}</h3>
+              {!loading && (
+                <button
+                  className="btn-icon"
+                  onClick={() => setConfirm(null)}
+                  aria-label="Close"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              )}
+            </div>
+            <div className="modal-body">
+              <p>{confirm.message}</p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-ghost"
+                onClick={() => setConfirm(null)}
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                className={`btn ${confirm.isDangerous ? "btn-danger" : "btn-primary"}`}
+                onClick={async () => {
+                  await confirm.onConfirm();
+                }}
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <span className="spinner"></span>
+                    Processing...
+                  </>
+                ) : (
+                  confirm.action
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
