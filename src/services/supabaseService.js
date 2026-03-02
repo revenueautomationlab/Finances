@@ -18,7 +18,8 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Fetch all data
+// Export supabase instance for use in other modules (like AuthContext)
+export { supabase }
 export async function fetchState() {
   try {
     const [
