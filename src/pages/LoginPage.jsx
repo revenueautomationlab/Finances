@@ -187,6 +187,130 @@ export default function LoginPage() {
           font-size: 12px;
           color: #718096;
         }
+
+        @media (max-width: 768px) {
+          .login-card {
+            max-width: 90%;
+            border-radius: 16px;
+          }
+
+          .login-header {
+            padding: 32px 24px;
+          }
+
+          .login-logo {
+            width: 52px;
+            height: 52px;
+            font-size: 28px;
+            margin: 0 auto 16px;
+          }
+
+          .login-header h1 {
+            font-size: 24px;
+          }
+
+          .login-header p {
+            font-size: 13px;
+          }
+
+          .login-content {
+            padding: 32px 24px;
+          }
+
+          .login-content h2 {
+            font-size: 20px;
+          }
+
+          .login-subtitle {
+            font-size: 13px;
+            margin-bottom: 24px;
+          }
+
+          .login-button {
+            padding: 13px 16px;
+            font-size: 15px;
+          }
+
+          .login-error {
+            font-size: 13px;
+            padding: 11px 14px;
+          }
+
+          .login-footer {
+            padding: 18px 24px;
+          }
+
+          .login-footer p {
+            font-size: 11px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .login-card {
+            max-width: 95%;
+            border-radius: 12px;
+          }
+
+          .login-header {
+            padding: 28px 20px;
+          }
+
+          .login-logo {
+            width: 48px;
+            height: 48px;
+            font-size: 24px;
+            margin: 0 auto 14px;
+          }
+
+          .login-header h1 {
+            font-size: 22px;
+            margin: 0 0 4px 0;
+          }
+
+          .login-header p {
+            font-size: 12px;
+          }
+
+          .login-content {
+            padding: 24px 20px;
+          }
+
+          .login-content h2 {
+            font-size: 18px;
+            margin: 0 0 8px 0;
+          }
+
+          .login-subtitle {
+            font-size: 12px;
+            margin-bottom: 20px;
+          }
+
+          .login-button {
+            padding: 12px 14px;
+            font-size: 14px;
+            gap: 8px;
+            margin-bottom: 16px;
+          }
+
+          .login-button svg {
+            width: 18px;
+            height: 18px;
+          }
+
+          .login-error {
+            font-size: 12px;
+            padding: 10px 12px;
+            margin-bottom: 16px;
+          }
+
+          .login-footer {
+            padding: 16px 20px;
+          }
+
+          .login-footer p {
+            font-size: 10px;
+          }
+        }
       `}</style>
     </div>
   );

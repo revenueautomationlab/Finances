@@ -276,6 +276,7 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Load data from Supabase on mount
   useEffect(() => {
@@ -555,8 +556,12 @@ export default function App() {
       { key: "bank", label: "Bank Savings", icon: Icons.bank },
       { key: "charity", label: "Charity", icon: Icons.charity },
     ];
+    const handleNavClick = (key) => {
+      setView(key);
+      setSidebarOpen(false);
+    };
     return (
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-brand">
           <div className="brand-logo">R</div>
           <div>
@@ -570,7 +575,7 @@ export default function App() {
             <button
               key={n.key}
               className={`nav-item ${view === n.key || (n.key === "projects" && view === "project") ? "active" : ""}`}
-              onClick={() => setView(n.key)}
+              onClick={() => handleNavClick(n.key)}
             >
               <span className="nav-icon">{n.icon}</span>
               <span className="nav-text">{n.label}</span>
@@ -1674,8 +1679,20 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
       <Sidebar />
       <main className="main-content">
+        <div className="mobile-header">
+          <button 
+            className="hamburger-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle menu"
+          >
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+        </div>
         {view === "dashboard" && <DashboardView />}
         {view === "projects" && <ProjectsView />}
         {view === "project" && <ProjectDetailView />}
