@@ -1,6 +1,7 @@
 # 🎯 Exact Copy-Paste Configuration
 
 ## Your Setup Details
+
 - **Dev URL**: http://localhost:5174
 - **Netlify URL**: https://ralfinance.netlify.app
 - **Supabase Project ID**: mssxrafomjlzoypjvjdu
@@ -10,6 +11,7 @@
 ## Google Cloud - Copy THIS URL ONLY
 
 ### Authorized Redirect URIs
+
 Put **ONLY THIS URL** in your Google OAuth client:
 
 ```
@@ -27,11 +29,13 @@ https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback
 Add these two URLs:
 
 **URL 1 (Development):**
+
 ```
 http://localhost:5174/auth/callback
 ```
 
 **URL 2 (Production):**
+
 ```
 https://ralfinance.netlify.app/auth/callback
 ```
@@ -47,19 +51,19 @@ The `signInWithGoogle()` function in `src/contexts/AuthContext.jsx` is already c
 ```jsx
 const signInWithGoogle = async () => {
   try {
-    setError(null)
+    setError(null);
     const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider: "google",
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
       },
-    })
-    if (error) throw error
+    });
+    if (error) throw error;
   } catch (err) {
-    console.error('Login error:', err)
-    setError(err.message)
+    console.error("Login error:", err);
+    setError(err.message);
   }
-}
+};
 ```
 
 ✅ It automatically sends the correct redirectTo based on whether you're on localhost or production!
@@ -75,6 +79,7 @@ Your `/auth/callback` route in `src/main.jsx` is already set up correctly:
 ```
 
 The `AuthCallbackPage.jsx` automatically:
+
 1. Receives the auth callback from Supabase
 2. Checks if user is authenticated
 3. Validates the email (revenueautomationlab@gmail.com only)
@@ -90,29 +95,31 @@ The `AuthCallbackPage.jsx` automatically:
 Two places validate the email:
 
 **Layer 1: AuthContext.jsx - On initial load**
+
 ```jsx
 if (session?.user) {
-  if (session.user.email === 'revenueautomationlab@gmail.com') {
-    setUser(session.user)
+  if (session.user.email === "revenueautomationlab@gmail.com") {
+    setUser(session.user);
   } else {
-    await supabase.auth.signOut()
-    setError('Access denied...')
+    await supabase.auth.signOut();
+    setError("Access denied...");
   }
 }
 ```
 
 **Layer 2: AuthContext.jsx - On every login**
+
 ```jsx
 supabase.auth.onAuthStateChange(async (event, session) => {
   if (session?.user) {
-    if (session.user.email === 'revenueautomationlab@gmail.com') {
-      setUser(session.user)
+    if (session.user.email === "revenueautomationlab@gmail.com") {
+      setUser(session.user);
     } else {
-      await supabase.auth.signOut()
-      setError('Access denied...')
+      await supabase.auth.signOut();
+      setError("Access denied...");
     }
   }
-})
+});
 ```
 
 ✅ Only authorized email can access! Anyone else is auto-signed out.

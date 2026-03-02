@@ -607,32 +607,47 @@ export default function App() {
               </strong>
             </div>
           </div>
-          <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '12px', color: '#718096', marginBottom: '10px' }}>
-              Signed in as:<br/>
-              <strong style={{ fontSize: '11px' }}>{user?.email || 'user@example.com'}</strong>
+          <div
+            style={{
+              marginTop: "20px",
+              paddingTop: "20px",
+              borderTop: "1px solid rgba(0,0,0,0.1)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#718096",
+                marginBottom: "10px",
+              }}
+            >
+              Signed in as:
+              <br />
+              <strong style={{ fontSize: "11px" }}>
+                {user?.email || "user@example.com"}
+              </strong>
             </div>
-            <button 
+            <button
               onClick={signOut}
               style={{
-                width: '100%',
-                padding: '8px 12px',
-                background: '#f7fafc',
-                color: '#2d3748',
-                border: '1px solid #cbd5e0',
-                borderRadius: '6px',
-                fontSize: '13px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
+                width: "100%",
+                padding: "8px 12px",
+                background: "#f7fafc",
+                color: "#2d3748",
+                border: "1px solid #cbd5e0",
+                borderRadius: "6px",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: "pointer",
+                transition: "all 0.2s ease",
               }}
               onMouseEnter={(e) => {
-                e.target.style.background = '#edf2f7';
-                e.target.style.color = '#1a202c';
+                e.target.style.background = "#edf2f7";
+                e.target.style.color = "#1a202c";
               }}
               onMouseLeave={(e) => {
-                e.target.style.background = '#f7fafc';
-                e.target.style.color = '#2d3748';
+                e.target.style.background = "#f7fafc";
+                e.target.style.color = "#2d3748";
               }}
             >
               Sign Out

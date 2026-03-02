@@ -18,7 +18,7 @@
 2. Click **+ ENABLE APIS AND SERVICES**
 3. Search for: `Google+ API`
 4. Click on it and click **ENABLE**
-5. Go back and search for: `OAuth 2.0` 
+5. Go back and search for: `OAuth 2.0`
 6. Find and enable **Google Identity Services API**
 
 ### Step 3: Create OAuth Credentials
@@ -40,9 +40,11 @@
 5. Choose **Web application**
 6. Name it: `RAL Finance Web`
 7. Under **Authorized redirect URIs**, add **ONLY THIS URL**:
+
    ```
    https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback
    ```
+
    > ✅ This is the ONLY URL Google needs!
    > Your localhost and Netlify URLs will go in Supabase, not here.
 
@@ -55,6 +57,7 @@
 ### Step 4: Save Your Credentials
 
 You now have:
+
 - **Client ID**: (something like `12345...apps.googleusercontent.com`)
 - **Client Secret**: (something like `GOCSPX-...`)
 
@@ -118,25 +121,30 @@ You now have:
 ## Troubleshooting
 
 ### "Redirect URL mismatch"
+
 - Make sure Supabase URL Configuration has your redirect URLs
 - Make sure Google Cloud has ONLY: `https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback`
 - Don't add localhost or Netlify URLs to Google Cloud - those go in Supabase only!
 
 ### "Invalid Client"
+
 - Double-check you copied the correct **Client ID** and **Client Secret**
 - Make sure there are no extra spaces
 
 ### "Unable to access the application"
+
 - You logged in with the wrong email
 - Only **revenueautomationlab@gmail.com** can access
 - Sign out and try again with the authorized email
 
 ### "Login page appears but button doesn't work"
+
 - Check browser console (F12 → Console)
 - Make sure `.env.local` has your Supabase URL and Key
 - Try refreshing the page
 
 ### "Stuck on 'Signing in' page"
+
 - Wait 5-10 seconds
 - If still stuck, close browser and go to localhost again
 - OR check your `.env.local` file is correct
@@ -146,6 +154,7 @@ You now have:
 ## What's Happening Behind the Scenes
 
 ### Login Flow
+
 ```
 1. User clicks "Sign in with Google"
    ↓
@@ -163,6 +172,7 @@ You now have:
 ```
 
 ### Data Access
+
 - All database operations require authentication
 - Only authenticated users can read/write data
 - The app only allows revenueautomationlab@gmail.com
@@ -171,16 +181,16 @@ You now have:
 
 ## Configuration Summary
 
-| Platform | Field | Value |
-|----------|-------|-------|
-| **Google Cloud** | App name | RAL Finance App |
-| **Google Cloud** | OAuth Type | Web application |
-| **Google Cloud** | Authorized redirect URIs | `https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback` (ONLY this one) |
-| **Supabase** | Provider | Google (Enabled) |
-| **Supabase** | Client ID | From Google Cloud |
-| **Supabase** | Client Secret | From Google Cloud |
-| **Supabase** | Redirect URLs | `http://localhost:5174/auth/callback` + `https://ralfinance.netlify.app/auth/callback` |
-| **App** | Authorized Email | revenueautomationlab@gmail.com |
+| Platform         | Field                    | Value                                                                                  |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------- |
+| **Google Cloud** | App name                 | RAL Finance App                                                                        |
+| **Google Cloud** | OAuth Type               | Web application                                                                        |
+| **Google Cloud** | Authorized redirect URIs | `https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback` (ONLY this one)            |
+| **Supabase**     | Provider                 | Google (Enabled)                                                                       |
+| **Supabase**     | Client ID                | From Google Cloud                                                                      |
+| **Supabase**     | Client Secret            | From Google Cloud                                                                      |
+| **Supabase**     | Redirect URLs            | `http://localhost:5174/auth/callback` + `https://ralfinance.netlify.app/auth/callback` |
+| **App**          | Authorized Email         | revenueautomationlab@gmail.com                                                         |
 
 ---
 
@@ -218,6 +228,7 @@ No additional configuration needed.
 ## Need Help?
 
 Check:
+
 1. Browser console (F12) for error messages
 2. Google Cloud Console credentials are correct
 3. Supabase URL Configuration has your URLs

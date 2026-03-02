@@ -1,8 +1,8 @@
-import React from 'react'
-import { useAuth } from '../contexts/AuthContext'
+import React from "react";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function LoginPage() {
-  const { signInWithGoogle, error, loading } = useAuth()
+  const { signInWithGoogle, error, loading } = useAuth();
 
   return (
     <div className="login-container">
@@ -15,27 +15,46 @@ export default function LoginPage() {
 
         <div className="login-content">
           <h2>Sign In</h2>
-          <p className="login-subtitle">Sign in with your Google account to get started</p>
+          <p className="login-subtitle">
+            Sign in with your Google account to get started
+          </p>
 
           {error && (
             <div className="login-error">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               {error}
             </div>
           )}
 
-          <button 
+          <button
             onClick={signInWithGoogle}
             disabled={loading}
             className="login-button"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="1"/><path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24"/>
-              <path d="M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"/>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <circle cx="12" cy="12" r="1" />
+              <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24" />
+              <path d="M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24" />
             </svg>
-            {loading ? 'Signing in...' : 'Sign in with Google'}
+            {loading ? "Signing in..." : "Sign in with Google"}
           </button>
 
           <div className="login-note">
@@ -198,5 +217,5 @@ export default function LoginPage() {
         }
       `}</style>
     </div>
-  )
+  );
 }
