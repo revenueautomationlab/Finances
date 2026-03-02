@@ -300,7 +300,13 @@ export default function App() {
     setTimeout(() => setToast(null), duration);
   };
 
-  const showConfirm = (title, message, action, onConfirm, isDangerous = false) => {
+  const showConfirm = (
+    title,
+    message,
+    action,
+    onConfirm,
+    isDangerous = false,
+  ) => {
     setConfirm({
       title,
       message,
@@ -416,12 +422,16 @@ export default function App() {
           setConfirm(null);
         } catch (error) {
           console.error("Failed to delete project:", error);
-          showToast(`✗ Failed to delete project: ${error.message}`, "error", 4000);
+          showToast(
+            `✗ Failed to delete project: ${error.message}`,
+            "error",
+            4000,
+          );
         } finally {
           setLoading(false);
         }
       },
-      true
+      true,
     );
   };
 
@@ -454,12 +464,16 @@ export default function App() {
           setConfirm(null);
         } catch (error) {
           console.error("Failed to delete payment:", error);
-          showToast(`✗ Failed to delete payment: ${error.message}`, "error", 4000);
+          showToast(
+            `✗ Failed to delete payment: ${error.message}`,
+            "error",
+            4000,
+          );
         } finally {
           setLoading(false);
         }
       },
-      true
+      true,
     );
   };
 
@@ -492,12 +506,16 @@ export default function App() {
           setConfirm(null);
         } catch (error) {
           console.error("Failed to delete expense:", error);
-          showToast(`✗ Failed to delete expense: ${error.message}`, "error", 4000);
+          showToast(
+            `✗ Failed to delete expense: ${error.message}`,
+            "error",
+            4000,
+          );
         } finally {
           setLoading(false);
         }
       },
-      true
+      true,
     );
   };
 
@@ -526,16 +544,23 @@ export default function App() {
         try {
           await dbDeleteBankSpending(id);
           await refreshData();
-          showToast(`✓ Bank spending of ${currency(amount)} deleted`, "success");
+          showToast(
+            `✓ Bank spending of ${currency(amount)} deleted`,
+            "success",
+          );
           setConfirm(null);
         } catch (error) {
           console.error("Failed to delete bank spending:", error);
-          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
+          showToast(
+            `✗ Failed to delete spending: ${error.message}`,
+            "error",
+            4000,
+          );
         } finally {
           setLoading(false);
         }
       },
-      true
+      true,
     );
   };
 
@@ -544,7 +569,10 @@ export default function App() {
     try {
       await dbAddCharitySpending(amount, date, description);
       await refreshData();
-      showToast(`✓ Charity spending of ${currency(amount)} recorded`, "success");
+      showToast(
+        `✓ Charity spending of ${currency(amount)} recorded`,
+        "success",
+      );
       setModal(null);
     } catch (error) {
       console.error("Failed to add charity spending:", error);
@@ -564,16 +592,23 @@ export default function App() {
         try {
           await dbDeleteCharitySpending(id);
           await refreshData();
-          showToast(`✓ Charity spending of ${currency(amount)} deleted`, "success");
+          showToast(
+            `✓ Charity spending of ${currency(amount)} deleted`,
+            "success",
+          );
           setConfirm(null);
         } catch (error) {
           console.error("Failed to delete charity spending:", error);
-          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
+          showToast(
+            `✗ Failed to delete spending: ${error.message}`,
+            "error",
+            4000,
+          );
         } finally {
           setLoading(false);
         }
       },
-      true
+      true,
     );
   };
 
@@ -621,15 +656,26 @@ export default function App() {
               </div>
             ))}
             <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={onClose} disabled={loading}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={onClose}
+                disabled={loading}
+              >
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary" disabled={loading}>
-                {loading ? "Processing..." : (title.startsWith("Edit")
-                  ? "Update"
-                  : title.startsWith("Spend")
-                    ? "Record"
-                    : "Add")}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loading}
+              >
+                {loading
+                  ? "Processing..."
+                  : title.startsWith("Edit")
+                    ? "Update"
+                    : title.startsWith("Spend")
+                      ? "Record"
+                      : "Add"}
               </button>
             </div>
           </form>
@@ -1342,7 +1388,9 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deletePayment(p.id, pay.id, pay.amount)}
+                          onClick={() =>
+                            deletePayment(p.id, pay.id, pay.amount)
+                          }
                         >
                           {Icons.trash}
                         </button>
@@ -1426,7 +1474,9 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteExpense(p.id, exp.id, exp.amount)}
+                          onClick={() =>
+                            deleteExpense(p.id, exp.id, exp.amount)
+                          }
                         >
                           {Icons.trash}
                         </button>
@@ -1805,12 +1855,22 @@ export default function App() {
         <div className={`toast toast-${toast.type}`}>
           <div className="toast-content">
             {toast.type === "success" ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
               </svg>
             ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
               </svg>
             )}
             <span>{toast.msg}</span>
@@ -1819,8 +1879,14 @@ export default function App() {
       )}
       {/* Confirmation Dialog */}
       {confirm && (
-        <div className="modal-overlay" onClick={() => !loading && setConfirm(null)}>
-          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal-overlay"
+          onClick={() => !loading && setConfirm(null)}
+        >
+          <div
+            className="modal confirm-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-header">
               <h3>{confirm.title}</h3>
               {!loading && (
@@ -1829,9 +1895,16 @@ export default function App() {
                   onClick={() => setConfirm(null)}
                   aria-label="Close"
                 >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/>
-                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
                 </button>
               )}
