@@ -1,9 +1,9 @@
 /**
  * Example: How to integrate Supabase into your App.jsx
- * 
+ *
  * This file shows the minimal changes needed to use Supabase
  * instead of the local JSON backend.
- * 
+ *
  * Key changes:
  * 1. Replace fetchState() and saveState() calls
  * 2. Import Supabase service functions
@@ -23,8 +23,8 @@ import {
   addBankSpending,
   deleteBankSpending,
   addCharitySpending,
-  deleteCharitySpending
-} from './services/supabaseService'
+  deleteCharitySpending,
+} from "./services/supabaseService";
 
 // Option 1: Update the fetchState function call in useEffect
 // BEFORE:
@@ -63,18 +63,18 @@ import {
 
 /**
  * IMPORTANT NOTES:
- * 
+ *
  * 1. The Supabase functions are async, so you'll need to update
  *    mutation handlers to be async functions
- * 
+ *
  * 2. After each mutation, you should refresh state from Supabase
  *    to ensure consistency
- * 
+ *
  * 3. Error handling becomes more important since network calls
  *    can fail
- * 
+ *
  * 4. For better UX, consider adding loading states during async operations
- * 
+ *
  * 5. The supabaseService.js already handles the data transformation
  *    between database format and app format
  */

@@ -53,6 +53,7 @@ node migrate-to-supabase.js
 ```
 
 This script will:
+
 - Clear existing data from Supabase tables
 - Import all projects, payments, expenses, and spending from `db.json`
 - Verify successful insertion
@@ -66,12 +67,12 @@ You have two options for using Supabase in your app:
 Update your `App.jsx` to use the Supabase service:
 
 ```jsx
-import { fetchState } from './services/supabaseService'
+import { fetchState } from "./services/supabaseService";
 
 // Instead of:
 // const res = await fetch(API)
 // Use:
-const data = await fetchState()
+const data = await fetchState();
 ```
 
 ### Option B: API Server (Recommended for multi-user apps)
@@ -90,38 +91,45 @@ Once data is migrated:
 export default defineConfig({
   plugins: [react()],
   // ... rest of config
-})
+});
 ```
 
 ## Available Functions in supabaseService.js
 
 ### Read Data
+
 - `fetchState()` - Get all projects, bank spending, and charity spending
 
 ### Projects
+
 - `addProject(name, totalValue)`
 - `updateProject(id, name, totalValue)`
 - `deleteProject(id)`
 
 ### Payments
+
 - `addPayment(projectId, amount, date, note)`
 - `deletePayment(projectId, paymentId)`
 
 ### Expenses
+
 - `addExpense(projectId, amount, date, description)`
 - `deleteExpense(projectId, expenseId)`
 
 ### Bank Spending
+
 - `addBankSpending(amount, date, description)`
 - `deleteBankSpending(id)`
 
 ### Charity Spending
+
 - `addCharitySpending(amount, date, description)`
 - `deleteCharitySpending(id)`
 
 ## Database Schema
 
 ### projects
+
 - `id` (text, primary key)
 - `name` (varchar)
 - `total_value` (decimal)
@@ -129,6 +137,7 @@ export default defineConfig({
 - `updated_at` (timestamp)
 
 ### payments
+
 - `id` (text, primary key)
 - `project_id` (text, foreign key)
 - `amount` (decimal)
@@ -136,6 +145,7 @@ export default defineConfig({
 - `note` (text)
 
 ### expenses
+
 - `id` (text, primary key)
 - `project_id` (text, foreign key)
 - `amount` (decimal)
@@ -143,12 +153,14 @@ export default defineConfig({
 - `description` (text)
 
 ### bank_spending
+
 - `id` (text, primary key)
 - `amount` (decimal)
 - `date` (date)
 - `description` (text)
 
 ### charity_spending
+
 - `id` (text, primary key)
 - `amount` (decimal)
 - `date` (date)
@@ -157,15 +169,18 @@ export default defineConfig({
 ## Troubleshooting
 
 ### Migration shows "Permission denied"
+
 - Ensure your Supabase role has write permissions
 - Check that tables were created successfully
 
 ### Data not appearing in app
+
 - Verify `.env.local` has correct Supabase URL and key
 - Check browser console for errors
 - Ensure `migrate-to-supabase.js` ran successfully
 
 ### Slow queries
+
 - Check that indexes were created in step 1
 - Consider creating additional indexes for frequently filtered columns
 

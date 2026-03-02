@@ -54,6 +54,7 @@ Your current `db.json` will be structured differently in PostgreSQL. This docume
 ## PostgreSQL Structure (New)
 
 ### Table: `projects`
+
 ```sql
 SELECT * FROM projects;
 
@@ -63,6 +64,7 @@ mm457g4t2wqqsz...  | Project Name  | 500.000     | 2026-02-27 00:17:11... | ...
 ```
 
 ### Table: `payments`
+
 ```sql
 SELECT * FROM payments;
 
@@ -72,6 +74,7 @@ mm4581opwydhkb...  | mm457g4t2wqqsz...      | 250.000 | 2026-02-27 | payment not
 ```
 
 ### Table: `expenses`
+
 ```sql
 SELECT * FROM expenses;
 
@@ -81,6 +84,7 @@ mm458h9t4nrkx3r... | mm457g4t2wqqsz...      | 38.000  | 2026-02-27 | expense des
 ```
 
 ### Table: `bank_spending`
+
 ```sql
 SELECT * FROM bank_spending;
 
@@ -90,6 +94,7 @@ mm45951le3bdx7...  | 5.000   | 2026-02-27 | spending description
 ```
 
 ### Table: `charity_spending`
+
 ```sql
 SELECT * FROM charity_spending;
 
@@ -100,19 +105,20 @@ id                  | amount  | date       | description
 
 ## Data Type Mapping
 
-| JSON Type | PostgreSQL Type | Notes |
-|-----------|-----------------|-------|
-| String ID | `TEXT` | Same format: `mm45951le3bdx7...` |
-| Number ($) | `DECIMAL(15, 3)` | Stores up to 15 digits with 3 decimals |
-| Date String | `DATE` | Format: YYYY-MM-DD |
-| ISO Timestamp | `TIMESTAMP` | Format: YYYY-MM-DD HH:MM:SS |
-| Text | `VARCHAR/TEXT` | Notes and descriptions |
+| JSON Type     | PostgreSQL Type  | Notes                                  |
+| ------------- | ---------------- | -------------------------------------- |
+| String ID     | `TEXT`           | Same format: `mm45951le3bdx7...`       |
+| Number ($)    | `DECIMAL(15, 3)` | Stores up to 15 digits with 3 decimals |
+| Date String   | `DATE`           | Format: YYYY-MM-DD                     |
+| ISO Timestamp | `TIMESTAMP`      | Format: YYYY-MM-DD HH:MM:SS            |
+| Text          | `VARCHAR/TEXT`   | Notes and descriptions                 |
 
 ## Key Differences
 
 ### Nested vs Normalized
 
 **JSON (Nested):**
+
 ```
 Project {
   payments: [
@@ -125,6 +131,7 @@ Project {
 ```
 
 **PostgreSQL (Normalized):**
+
 ```
 Projects table
 Payments table → linked by project_id
@@ -176,6 +183,7 @@ The `supabaseService.js` file automatically converts between formats:
 ## Querying the Database
 
 ### List all projects with their payments
+
 ```sql
 SELECT p.*, json_agg(pay.*) as payments
 FROM projects p
@@ -184,6 +192,7 @@ GROUP BY p.id;
 ```
 
 ### Find expenses for a specific project
+
 ```sql
 SELECT * FROM expenses
 WHERE project_id = 'mm457g4t2wqqsz...'
@@ -191,6 +200,7 @@ ORDER BY date DESC;
 ```
 
 ### Get total bank spending for a date range
+
 ```sql
 SELECT SUM(amount) as total
 FROM bank_spending

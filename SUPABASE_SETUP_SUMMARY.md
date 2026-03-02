@@ -5,6 +5,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
 ## 📦 What I Created For You
 
 ### 1. **Database Schema**
+
 - **`migrations/001_create_tables.sql`** - Complete PostgreSQL schema with 5 tables:
   - `projects` - Your projects
   - `payments` - Project payments
@@ -13,6 +14,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
   - `charity_spending` - Charity donations
 
 ### 2. **Migration Tools**
+
 - **`migrate-to-supabase.js`** - One-command script to import all your data from `db.json` to PostgreSQL
   - Automatically clears old data
   - Imports projects with nested payments and expenses
@@ -20,6 +22,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
   - Detailed progress reporting
 
 ### 3. **Backend Services**
+
 - **`src/services/supabaseService.js`** - Client library with functions for:
   - Projects: add, update, delete
   - Payments: add, delete
@@ -28,6 +31,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
   - Automatic data transformation (JSON ↔ PostgreSQL)
 
 ### 4. **Example Code**
+
 - **`server-example.js`** - Full Express.js backend (optional) for:
   - Multi-user scenarios
   - Better scalability
@@ -36,6 +40,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
 - **`SUPABASE_INTEGRATION_EXAMPLE.js`** - How to update App.jsx to use Supabase
 
 ### 5. **Documentation**
+
 - **`QUICKSTART.md`** - 5-minute setup guide
 - **`SUPABASE_MIGRATION.md`** - Complete migration guide with troubleshooting
 - **`DATA_STRUCTURE_MAPPING.md`** - Visual comparison of JSON vs PostgreSQL structure
@@ -43,6 +48,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
 ## 🚀 Quick Start (3 Steps)
 
 ### Step 1: Create Supabase Project
+
 ```
 1. Go to https://supabase.com
 2. Create new project
@@ -50,6 +56,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
 ```
 
 ### Step 2: Create Database Tables
+
 ```
 1. Go to SQL Editor in Supabase
 2. Copy-paste migrations/001_create_tables.sql
@@ -57,6 +64,7 @@ I've generated a complete migration toolkit for converting your RAL Finance app 
 ```
 
 ### Step 3: Migrate Your Data
+
 ```bash
 # Create .env.local with your Supabase credentials
 echo 'VITE_SUPABASE_URL=https://your-project.supabase.co' > .env.local
@@ -70,22 +78,26 @@ node migrate-to-supabase.js
 ## 💡 Two Implementation Paths
 
 ### Path A: Browser Client (Simplest)
+
 ```jsx
 // In App.jsx, replace fetch calls with:
-import { fetchState, addProject } from './services/supabaseService'
+import { fetchState, addProject } from "./services/supabaseService";
 
-const data = await fetchState()
-await addProject(name, value)
+const data = await fetchState();
+await addProject(name, value);
 ```
+
 - ✅ Works immediately
 - ✅ No backend needed
 - ⚠️ Exposes Supabase URL to client
 
 ### Path B: Express Backend (Production)
+
 ```bash
 # Start backend server
 node server-example.js  # Listens on :3001
 ```
+
 - ✅ Better security
 - ✅ Easier to scale
 - ✅ Same API endpoints as before
@@ -105,6 +117,7 @@ node server-example.js  # Listens on :3001
 ## 🔄 Your Current Workflow (No Changes Needed!)
 
 The existing flow still works:
+
 ```
 App.jsx → API Endpoint → Database
    ↓
@@ -120,16 +133,19 @@ App.jsx → API Endpoint → Database
 ## 🌐 Deployment Notes
 
 ### Netlify
+
 - Add environment variables in dashboard:
   - `VITE_SUPABASE_URL`
   - `VITE_SUPABASE_ANON_KEY`
 - No other changes needed
 
 ### Vercel
+
 - Same environment variable setup
 - Both Path A and Path B work
 
 ### With Express Backend
+
 - Deploy backend separately (Heroku, Railway, Render)
 - Update API endpoint in App.jsx
 - Frontend goes to Netlify/Vercel as before
@@ -145,6 +161,7 @@ App.jsx → API Endpoint → Database
 ## ❓ Questions?
 
 See the detailed guides:
+
 - **"How do I..."**: Check `SUPABASE_MIGRATION.md`
 - **"Show me code examples"**: See `SUPABASE_INTEGRATION_EXAMPLE.js`
 - **"I need a backend"**: Use `server-example.js`
