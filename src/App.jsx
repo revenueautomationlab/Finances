@@ -1,5 +1,19 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
+import {
+  fetchState as fetchStateFromDB,
+  addProject as dbAddProject,
+  updateProject as dbUpdateProject,
+  deleteProject as dbDeleteProject,
+  addPayment as dbAddPayment,
+  deletePayment as dbDeletePayment,
+  addExpense as dbAddExpense,
+  deleteExpense as dbDeleteExpense,
+  addBankSpending as dbAddBankSpending,
+  deleteBankSpending as dbDeleteBankSpending,
+  addCharitySpending as dbAddCharitySpending,
+  deleteCharitySpending as dbDeleteCharitySpending,
+} from './services/supabaseService'
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2)
 
@@ -14,23 +28,7 @@ const formatDate = (d) => {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-const API = '/api/data'
-
 const initialState = { projects: [], bankSpending: [], charitySpending: [] }
-
-async function fetchState() {
-  try {
-    const res = await fetch(API)
-    const data = await res.json()
-    return { ...initialState, ...data }
-  } catch { return initialState }
-}
-
-async function saveState(data) {
-  try {
-    await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
-  } catch (e) { console.error('Failed to save:', e) }
-}
 
 // --- SVG Icons ---
 const Icons = {
@@ -59,12 +57,33 @@ export default function App() {
   const [modal, setModal] = useState(null)
   const [toast, setToast] = useState(null)
 
-  useEffect(() => { fetchState().then(data => { setState(data); setLoaded(true) }) }, [])
-  useEffect(() => { if (loaded) saveState(state) }, [state, loaded])
+  // Load data from Supabase on mount
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const data = await fetchStateFromDB()
+        setState(data)
+        setLoaded(true)
+      } catch (error) {
+        console.error('Failed to load data:', error)
+        setLoaded(true) // Still load even if error
+      }
+    }
+    loadData()
+  }, [])
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 2500)
+  }
+
+  const refreshData = async () => {
+    try {
+      const data = await fetchStateFromDB()
+      setState(data)
+    } catch (error) {
+      console.error('Failed to refresh data:', error)
+    }
   }
 
   const { projects, bankSpending, charitySpending } = state
@@ -100,53 +119,130 @@ export default function App() {
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0)
   const selectedProject = projectStats.find(p => p.id === selectedProjectId) || null
 
-  // --- CRUD ---
-  const addProject = (name, totalValue) => {
-    updateProjects(ps => [...ps, { id: uid(), name, totalValue: Number(totalValue), payments: [], expenses: [], createdAt: new Date().toISOString() }])
-    showToast('Project created')
+  // --- CRUD Operations ---
+  const addProject = async (name, totalValue) => {
+    try {
+      await dbAddProject(name, totalValue)
+      await refreshData()
+      showToast('Project created')
+    } catch (error) {
+      console.error('Failed to add project:', error)
+      showToast('Failed to create project', 'error')
+    }
   }
-  const editProject = (id, name, totalValue) => {
-    updateProjects(ps => ps.map(p => p.id === id ? { ...p, name, totalValue: Number(totalValue) } : p))
-    showToast('Project updated')
+
+  const editProject = async (id, name, totalValue) => {
+    try {
+      await dbUpdateProject(id, name, totalValue)
+      await refreshData()
+      showToast('Project updated')
+    } catch (error) {
+      console.error('Failed to update project:', error)
+      showToast('Failed to update project', 'error')
+    }
   }
-  const deleteProject = (id) => {
+
+  const deleteProject = async (id) => {
     if (!confirm('Delete this project and all its data?')) return
-    updateProjects(ps => ps.filter(p => p.id !== id))
-    if (selectedProjectId === id) { setSelectedProjectId(null); setView('dashboard') }
-    showToast('Project deleted', 'error')
+    try {
+      await dbDeleteProject(id)
+      if (selectedProjectId === id) { setSelectedProjectId(null); setView('dashboard') }
+      await refreshData()
+      showToast('Project deleted', 'error')
+    } catch (error) {
+      console.error('Failed to delete project:', error)
+      showToast('Failed to delete project', 'error')
+    }
   }
-  const addPayment = (projectId, amount, date, note) => {
-    updateProjects(ps => ps.map(p => p.id === projectId ? { ...p, payments: [...(p.payments || []), { id: uid(), amount: Number(amount), date, note }] } : p))
-    showToast('Payment recorded')
+
+  const addPayment = async (projectId, amount, date, note) => {
+    try {
+      await dbAddPayment(projectId, amount, date, note)
+      await refreshData()
+      showToast('Payment recorded')
+    } catch (error) {
+      console.error('Failed to add payment:', error)
+      showToast('Failed to record payment', 'error')
+    }
   }
-  const deletePayment = (projectId, paymentId) => {
-    updateProjects(ps => ps.map(p => p.id === projectId ? { ...p, payments: p.payments.filter(x => x.id !== paymentId) } : p))
-    showToast('Payment removed', 'error')
+
+  const deletePayment = async (projectId, paymentId) => {
+    try {
+      await dbDeletePayment(projectId, paymentId)
+      await refreshData()
+      showToast('Payment removed', 'error')
+    } catch (error) {
+      console.error('Failed to delete payment:', error)
+      showToast('Failed to remove payment', 'error')
+    }
   }
-  const addExpense = (projectId, amount, date, description) => {
-    updateProjects(ps => ps.map(p => p.id === projectId ? { ...p, expenses: [...(p.expenses || []), { id: uid(), amount: Number(amount), date, description }] } : p))
-    showToast('Expense recorded')
+
+  const addExpense = async (projectId, amount, date, description) => {
+    try {
+      await dbAddExpense(projectId, amount, date, description)
+      await refreshData()
+      showToast('Expense recorded')
+    } catch (error) {
+      console.error('Failed to add expense:', error)
+      showToast('Failed to record expense', 'error')
+    }
   }
-  const deleteExpense = (projectId, expenseId) => {
-    updateProjects(ps => ps.map(p => p.id === projectId ? { ...p, expenses: p.expenses.filter(x => x.id !== expenseId) } : p))
-    showToast('Expense removed', 'error')
+
+  const deleteExpense = async (projectId, expenseId) => {
+    try {
+      await dbDeleteExpense(projectId, expenseId)
+      await refreshData()
+      showToast('Expense removed', 'error')
+    } catch (error) {
+      console.error('Failed to delete expense:', error)
+      showToast('Failed to remove expense', 'error')
+    }
   }
-  const addBankSpending = (amount, date, description) => {
-    setState(s => ({ ...s, bankSpending: [...s.bankSpending, { id: uid(), amount: Number(amount), date, description }] }))
-    showToast('Bank spending recorded')
+
+  const addBankSpending = async (amount, date, description) => {
+    try {
+      await dbAddBankSpending(amount, date, description)
+      await refreshData()
+      showToast('Bank spending recorded')
+    } catch (error) {
+      console.error('Failed to add bank spending:', error)
+      showToast('Failed to record spending', 'error')
+    }
   }
-  const deleteBankSpending = (id) => {
-    setState(s => ({ ...s, bankSpending: s.bankSpending.filter(x => x.id !== id) }))
-    showToast('Spending removed', 'error')
+
+  const deleteBankSpending = async (id) => {
+    try {
+      await dbDeleteBankSpending(id)
+      await refreshData()
+      showToast('Spending removed', 'error')
+    } catch (error) {
+      console.error('Failed to delete bank spending:', error)
+      showToast('Failed to remove spending', 'error')
+    }
   }
-  const addCharitySpending = (amount, date, description) => {
-    setState(s => ({ ...s, charitySpending: [...s.charitySpending, { id: uid(), amount: Number(amount), date, description }] }))
-    showToast('Charity spending recorded')
+
+  const addCharitySpending = async (amount, date, description) => {
+    try {
+      await dbAddCharitySpending(amount, date, description)
+      await refreshData()
+      showToast('Charity spending recorded')
+    } catch (error) {
+      console.error('Failed to add charity spending:', error)
+      showToast('Failed to record spending', 'error')
+    }
   }
-  const deleteCharitySpending = (id) => {
-    setState(s => ({ ...s, charitySpending: s.charitySpending.filter(x => x.id !== id) }))
-    showToast('Spending removed', 'error')
+
+  const deleteCharitySpending = async (id) => {
+    try {
+      await dbDeleteCharitySpending(id)
+      await refreshData()
+      showToast('Spending removed', 'error')
+    } catch (error) {
+      console.error('Failed to delete charity spending:', error)
+      showToast('Failed to remove spending', 'error')
+    }
   }
+
   const openProject = (id) => { setSelectedProjectId(id); setView('project') }
 
   // --- Modal Form ---
