@@ -25,11 +25,19 @@ export async function fetchState() {
     const [
       { data: projects },
       { data: bankSpending },
-      { data: charitySpending },
+      { data: secretInvestmentSpending },
+      { data: partnerWithdrawals },
+      { data: budgets },
+      { data: recurringRevenue },
+      { data: recurringExpenses },
     ] = await Promise.all([
       supabase.from("projects").select("*, payments(*), expenses(*)"),
       supabase.from("bank_spending").select("*"),
-      supabase.from("charity_spending").select("*"),
+      supabase.from("secret_investment_spending").select("*"),
+      supabase.from("partner_withdrawals").select("*"),
+      supabase.from("budgets").select("*, budget_spending(*)"),
+      supabase.from("recurring_revenue").select("*"),
+      supabase.from("recurring_expenses").select("*"),
     ]);
 
     // Transform database format to application format
@@ -60,11 +68,53 @@ export async function fetchState() {
         date: b.date,
         description: b.description,
       })),
-      charitySpending: (charitySpending || []).map((c) => ({
+      secretInvestmentSpending: (secretInvestmentSpending || []).map((c) => ({
         id: c.id,
         amount: parseFloat(c.amount),
         date: c.date,
         description: c.description,
+      })),
+      partnerWithdrawals: (partnerWithdrawals || []).map((w) => ({
+        id: w.id,
+        partnerName: w.partner_name,
+        amount: parseFloat(w.amount),
+        date: w.date,
+        note: w.note,
+      })),
+      budgets: (budgets || []).map((b) => ({
+        id: b.id,
+        name: b.name,
+        allocatedAmount: parseFloat(b.allocated_amount),
+        description: b.description,
+        spending: (b.budget_spending || []).map((s) => ({
+          id: s.id,
+          amount: parseFloat(s.amount),
+          date: s.date,
+          description: s.description,
+        })),
+        createdAt: b.created_at,
+      })),
+      recurringRevenue: (recurringRevenue || []).map((r) => ({
+        id: r.id,
+        projectId: r.project_id,
+        amount: parseFloat(r.amount),
+        frequency: r.frequency,
+        description: r.description,
+        startDate: r.start_date,
+        nextDue: r.next_due,
+        active: r.active,
+        createdAt: r.created_at,
+      })),
+      recurringExpenses: (recurringExpenses || []).map((r) => ({
+        id: r.id,
+        projectId: r.project_id,
+        amount: parseFloat(r.amount),
+        frequency: r.frequency,
+        description: r.description,
+        startDate: r.start_date,
+        nextDue: r.next_due,
+        active: r.active,
+        createdAt: r.created_at,
       })),
     };
   } catch (error) {
@@ -197,10 +247,10 @@ export async function deleteBankSpending(id) {
   if (error) throw error;
 }
 
-// Charity spending operations
-export async function addCharitySpending(amount, date, description) {
+// Secret investment spending operations
+export async function addSecretInvestmentSpending(amount, date, description) {
   const { data, error } = await supabase
-    .from("charity_spending")
+    .from("secret_investment_spending")
     .insert([
       {
         id: generateId(),
@@ -215,11 +265,184 @@ export async function addCharitySpending(amount, date, description) {
   return data[0];
 }
 
-export async function deleteCharitySpending(id) {
+export async function deleteSecretInvestmentSpending(id) {
   const { error } = await supabase
-    .from("charity_spending")
+    .from("secret_investment_spending")
     .delete()
     .eq("id", id);
+
+  if (error) throw error;
+}
+
+// Partner withdrawal operations
+export async function addPartnerWithdrawal(partnerName, amount, date, note) {
+  const { data, error } = await supabase
+    .from("partner_withdrawals")
+    .insert([
+      {
+        id: generateId(),
+        partner_name: partnerName,
+        amount,
+        date,
+        note: note || null,
+      },
+    ])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deletePartnerWithdrawal(id) {
+  const { error } = await supabase
+    .from("partner_withdrawals")
+    .delete()
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+// Budget operations
+export async function addBudget(name, allocatedAmount, description) {
+  const { data, error } = await supabase
+    .from("budgets")
+    .insert([
+      {
+        id: generateId(),
+        name,
+        allocated_amount: allocatedAmount,
+        description: description || null,
+      },
+    ])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+}
+
+export async function updateBudget(id, name, allocatedAmount, description) {
+  const { error } = await supabase
+    .from("budgets")
+    .update({ name, allocated_amount: allocatedAmount, description: description || null })
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+export async function deleteBudget(id) {
+  const { error } = await supabase.from("budgets").delete().eq("id", id);
+
+  if (error) throw error;
+}
+
+// Budget spending operations
+export async function addBudgetSpending(budgetId, amount, date, description) {
+  const { data, error } = await supabase
+    .from("budget_spending")
+    .insert([
+      {
+        id: generateId(),
+        budget_id: budgetId,
+        amount,
+        date,
+        description,
+      },
+    ])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deleteBudgetSpending(id) {
+  const { error } = await supabase
+    .from("budget_spending")
+    .delete()
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+// Recurring revenue operations
+export async function addRecurringRevenue(projectId, amount, frequency, description, startDate) {
+  const { data, error } = await supabase
+    .from("recurring_revenue")
+    .insert([
+      {
+        id: generateId(),
+        project_id: projectId || null,
+        amount,
+        frequency,
+        description,
+        start_date: startDate,
+        next_due: startDate,
+      },
+    ])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+}
+
+export async function updateRecurringRevenue(id, projectId, amount, frequency, description, active) {
+  const { error } = await supabase
+    .from("recurring_revenue")
+    .update({
+      project_id: projectId || null,
+      amount,
+      frequency,
+      description,
+      active,
+    })
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+export async function deleteRecurringRevenue(id) {
+  const { error } = await supabase.from("recurring_revenue").delete().eq("id", id);
+
+  if (error) throw error;
+}
+
+// Recurring expense operations
+export async function addRecurringExpense(projectId, amount, frequency, description, startDate) {
+  const { data, error } = await supabase
+    .from("recurring_expenses")
+    .insert([
+      {
+        id: generateId(),
+        project_id: projectId || null,
+        amount,
+        frequency,
+        description,
+        start_date: startDate,
+        next_due: startDate,
+      },
+    ])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+}
+
+export async function updateRecurringExpense(id, projectId, amount, frequency, description, active) {
+  const { error } = await supabase
+    .from("recurring_expenses")
+    .update({
+      project_id: projectId || null,
+      amount,
+      frequency,
+      description,
+      active,
+    })
+    .eq("id", id);
+
+  if (error) throw error;
+}
+
+export async function deleteRecurringExpense(id) {
+  const { error } = await supabase.from("recurring_expenses").delete().eq("id", id);
 
   if (error) throw error;
 }

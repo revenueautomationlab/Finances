@@ -1,10 +1,32 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { supabase } from "../services/supabaseService";
 
 export default function AuthCallbackPage() {
   const navigate = useNavigate();
   const { user, loading, error } = useAuth();
+
+  // On mount, explicitly exchange the URL hash/code for a session
+  // This ensures the auth tokens from the redirect are properly processed
+  useEffect(() => {
+    const handleCallback = async () => {
+      try {
+        // Check if there are auth params in the URL (hash or query)
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        const queryParams = new URLSearchParams(window.location.search);
+
+        if (hashParams.get("access_token") || queryParams.get("code")) {
+          // Let Supabase process the callback — it auto-detects hash/code
+          // getSession() triggers the exchange if needed
+          await supabase.auth.getSession();
+        }
+      } catch (err) {
+        console.error("Callback auth exchange failed:", err);
+      }
+    };
+    handleCallback();
+  }, []);
 
   useEffect(() => {
     if (!loading) {
@@ -17,6 +39,16 @@ export default function AuthCallbackPage() {
       }
     }
   }, [user, loading, error, navigate]);
+
+  // Timeout fallback — if loading never resolves, redirect to login
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (loading) {
+        navigate("/login", { replace: true });
+      }
+    }, 15000);
+    return () => clearTimeout(timeout);
+  }, [loading, navigate]);
 
   return (
     <div

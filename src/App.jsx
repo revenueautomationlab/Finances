@@ -11,8 +11,21 @@ import {
   deleteExpense as dbDeleteExpense,
   addBankSpending as dbAddBankSpending,
   deleteBankSpending as dbDeleteBankSpending,
-  addCharitySpending as dbAddCharitySpending,
-  deleteCharitySpending as dbDeleteCharitySpending,
+  addSecretInvestmentSpending as dbAddSecretInvestmentSpending,
+  deleteSecretInvestmentSpending as dbDeleteSecretInvestmentSpending,
+  addPartnerWithdrawal as dbAddPartnerWithdrawal,
+  deletePartnerWithdrawal as dbDeletePartnerWithdrawal,
+  addBudget as dbAddBudget,
+  updateBudget as dbUpdateBudget,
+  deleteBudget as dbDeleteBudget,
+  addBudgetSpending as dbAddBudgetSpending,
+  deleteBudgetSpending as dbDeleteBudgetSpending,
+  addRecurringRevenue as dbAddRecurringRevenue,
+  updateRecurringRevenue as dbUpdateRecurringRevenue,
+  deleteRecurringRevenue as dbDeleteRecurringRevenue,
+  addRecurringExpense as dbAddRecurringExpense,
+  updateRecurringExpense as dbUpdateRecurringExpense,
+  deleteRecurringExpense as dbDeleteRecurringExpense,
 } from "./services/supabaseService";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -38,7 +51,7 @@ const formatDate = (d) => {
   });
 };
 
-const initialState = { projects: [], bankSpending: [], charitySpending: [] };
+const initialState = { projects: [], bankSpending: [], secretInvestmentSpending: [], partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [] };
 
 // --- SVG Icons ---
 const Icons = {
@@ -279,6 +292,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [reportMonth, setReportMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   // Load data from Supabase on mount
   useEffect(() => {
@@ -325,7 +342,7 @@ export default function App() {
     }
   };
 
-  const { projects, bankSpending, charitySpending } = state;
+  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, budgets, recurringRevenue, recurringExpenses } = state;
   const updateProjects = (fn) =>
     setState((s) => ({ ...s, projects: fn(s.projects) }));
 
@@ -346,9 +363,9 @@ export default function App() {
         totalExpenses,
         profit,
         bankShare: share,
-        partner1Share: share,
-        partner2Share: share,
-        charityShare: share,
+        suhaibShare: share,
+        mohammedShare: share,
+        secretInvestmentShare: share,
       };
     });
   }, [projects]);
@@ -359,17 +376,34 @@ export default function App() {
     return { income, spent, balance: income - spent };
   }, [projectStats, bankSpending]);
 
-  const globalCharity = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.charityShare, 0);
-    const spent = charitySpending.reduce((a, x) => a + x.amount, 0);
+  const globalSecretInvestment = useMemo(() => {
+    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0);
+    const spent = secretInvestmentSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, charitySpending]);
+  }, [projectStats, secretInvestmentSpending]);
 
   const globalProfit = projectStats.reduce((a, p) => a + p.profit, 0);
-  const globalPartner1 = projectStats.reduce((a, p) => a + p.partner1Share, 0);
-  const globalPartner2 = projectStats.reduce((a, p) => a + p.partner2Share, 0);
+  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0);
+  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0);
   const globalRevenue = projectStats.reduce((a, p) => a + p.totalPaid, 0);
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0);
+  const suhaibWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'suhaib');
+  const mohammedWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'mohammed');
+  const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
+  const mohammedWithdrawn = mohammedWithdrawals.reduce((a, w) => a + w.amount, 0);
+  const suhaibAvailable = globalSuhaib - suhaibWithdrawn;
+  const mohammedAvailable = globalMohammed - mohammedWithdrawn;
+
+  const budgetStats = budgets.map(b => {
+    const spent = (b.spending || []).reduce((a, s) => a + s.amount, 0);
+    return { ...b, spent, remaining: b.allocatedAmount - spent };
+  });
+  const totalBudgetAllocated = budgetStats.reduce((a, b) => a + b.allocatedAmount, 0);
+  const totalBudgetSpent = budgetStats.reduce((a, b) => a + b.spent, 0);
+
+  // Total money physically in the bank
+  const totalPhysicalBank = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - globalSecretInvestment.spent - globalBank.spent - totalBudgetSpent;
+
   const selectedProject =
     projectStats.find((p) => p.id === selectedProjectId) || null;
 
@@ -564,41 +598,41 @@ export default function App() {
     );
   };
 
-  const addCharitySpending = async (amount, date, description) => {
+  const addSecretInvestmentSpending = async (amount, date, description) => {
     setLoading(true);
     try {
-      await dbAddCharitySpending(amount, date, description);
+      await dbAddSecretInvestmentSpending(amount, date, description);
       await refreshData();
       showToast(
-        `✓ Charity spending of ${currency(amount)} recorded`,
+        `✓ Secret Investment spending of ${currency(amount)} recorded`,
         "success",
       );
       setModal(null);
     } catch (error) {
-      console.error("Failed to add charity spending:", error);
+      console.error("Failed to add secret investment spending:", error);
       showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
     } finally {
       setLoading(false);
     }
   };
 
-  const deleteCharitySpending = (id, amount) => {
+  const deleteSecretInvestmentSpending = (id, amount) => {
     showConfirm(
-      "Delete Charity Spending",
-      `Are you sure you want to delete this charity spending of ${currency(amount)}?`,
+      "Delete Secret Investment Spending",
+      `Are you sure you want to delete this secret investment spending of ${currency(amount)}?`,
       "Delete",
       async () => {
         setLoading(true);
         try {
-          await dbDeleteCharitySpending(id);
+          await dbDeleteSecretInvestmentSpending(id);
           await refreshData();
           showToast(
-            `✓ Charity spending of ${currency(amount)} deleted`,
+            `✓ Secret Investment spending of ${currency(amount)} deleted`,
             "success",
           );
           setConfirm(null);
         } catch (error) {
-          console.error("Failed to delete charity spending:", error);
+          console.error("Failed to delete secret investment spending:", error);
           showToast(
             `✗ Failed to delete spending: ${error.message}`,
             "error",
@@ -610,6 +644,247 @@ export default function App() {
       },
       true,
     );
+  };
+
+  const addPartnerWithdrawal = async (partnerName, amount, date, note) => {
+    setLoading(true);
+    try {
+      await dbAddPartnerWithdrawal(partnerName, amount, date, note);
+      await refreshData();
+      showToast(`✓ Withdrawal of ${currency(amount)} recorded for ${partnerName === 'suhaib' ? 'Suhaib' : 'Mohammed'}`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to add partner withdrawal:", error);
+      showToast(`✗ Failed to record withdrawal: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deletePartnerWithdrawal = (id, amount) => {
+    showConfirm(
+      "Delete Withdrawal",
+      `Are you sure you want to delete this withdrawal of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeletePartnerWithdrawal(id);
+          await refreshData();
+          showToast(`✓ Withdrawal of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete partner withdrawal:", error);
+          showToast(
+            `✗ Failed to delete withdrawal: ${error.message}`,
+            "error",
+            4000,
+          );
+        } finally {
+          setLoading(false);
+        }
+      },
+      true,
+    );
+  };
+
+  const addBudget = async (name, allocatedAmount, description) => {
+    setLoading(true);
+    try {
+      await dbAddBudget(name, allocatedAmount, description);
+      await refreshData();
+      showToast(`✓ Budget "${name}" created successfully`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to add budget:", error);
+      showToast(`✗ Failed to create budget: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const editBudget = async (id, name, allocatedAmount, description) => {
+    setLoading(true);
+    try {
+      await dbUpdateBudget(id, name, allocatedAmount, description);
+      await refreshData();
+      showToast(`✓ Budget "${name}" updated successfully`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to update budget:", error);
+      showToast(`✗ Failed to update budget: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteBudget = (id, name) => {
+    showConfirm(
+      "Delete Budget",
+      `Are you sure you want to delete "${name}"? This action cannot be undone and will remove all spending records.`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteBudget(id);
+          await refreshData();
+          showToast(`✓ Budget "${name}" deleted successfully`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete budget:", error);
+          showToast(`✗ Failed to delete budget: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true,
+    );
+  };
+
+  const addBudgetSpending = async (budgetId, amount, date, description) => {
+    setLoading(true);
+    try {
+      await dbAddBudgetSpending(budgetId, amount, date, description);
+      await refreshData();
+      showToast(`✓ Spending of ${currency(amount)} recorded`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to add budget spending:", error);
+      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteBudgetSpending = (id, amount) => {
+    showConfirm(
+      "Delete Budget Spending",
+      `Are you sure you want to delete this spending of ${currency(amount)}?`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteBudgetSpending(id);
+          await refreshData();
+          showToast(`✓ Spending of ${currency(amount)} deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete budget spending:", error);
+          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true,
+    );
+  };
+
+  // --- Recurring Revenue ---
+  const addRecurringRevenue = async (projectId, amount, frequency, description, startDate) => {
+    setLoading(true);
+    try {
+      await dbAddRecurringRevenue(projectId, amount, frequency, description, startDate);
+      await refreshData();
+      showToast(`✓ Recurring revenue "${description}" added`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to add recurring revenue:", error);
+      showToast(`✗ Failed to add recurring revenue: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteRecurringRevenue = (id, description) => {
+    showConfirm(
+      "Delete Recurring Revenue",
+      `Are you sure you want to delete "${description}"? This action cannot be undone.`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteRecurringRevenue(id);
+          await refreshData();
+          showToast(`✓ Recurring revenue "${description}" deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete recurring revenue:", error);
+          showToast(`✗ Failed to delete recurring revenue: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true,
+    );
+  };
+
+  const toggleRecurringRevenue = async (id, currentActive) => {
+    setLoading(true);
+    try {
+      const item = recurringRevenue.find((r) => r.id === id);
+      await dbUpdateRecurringRevenue(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
+      await refreshData();
+      showToast(`✓ Recurring revenue ${!currentActive ? "activated" : "paused"}`, "success");
+    } catch (error) {
+      console.error("Failed to toggle recurring revenue:", error);
+      showToast(`✗ Failed to update status: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Recurring Expenses ---
+  const addRecurringExpense = async (projectId, amount, frequency, description, startDate) => {
+    setLoading(true);
+    try {
+      await dbAddRecurringExpense(projectId, amount, frequency, description, startDate);
+      await refreshData();
+      showToast(`✓ Recurring expense "${description}" added`, "success");
+      setModal(null);
+    } catch (error) {
+      console.error("Failed to add recurring expense:", error);
+      showToast(`✗ Failed to add recurring expense: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteRecurringExpense = (id, description) => {
+    showConfirm(
+      "Delete Recurring Expense",
+      `Are you sure you want to delete "${description}"? This action cannot be undone.`,
+      "Delete",
+      async () => {
+        setLoading(true);
+        try {
+          await dbDeleteRecurringExpense(id);
+          await refreshData();
+          showToast(`✓ Recurring expense "${description}" deleted`, "success");
+          setConfirm(null);
+        } catch (error) {
+          console.error("Failed to delete recurring expense:", error);
+          showToast(`✗ Failed to delete recurring expense: ${error.message}`, "error", 4000);
+        } finally {
+          setLoading(false);
+        }
+      },
+      true,
+    );
+  };
+
+  const toggleRecurringExpense = async (id, currentActive) => {
+    setLoading(true);
+    try {
+      const item = recurringExpenses.find((r) => r.id === id);
+      await dbUpdateRecurringExpense(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
+      await refreshData();
+      showToast(`✓ Recurring expense ${!currentActive ? "activated" : "paused"}`, "success");
+    } catch (error) {
+      console.error("Failed to toggle recurring expense:", error);
+      showToast(`✗ Failed to update status: ${error.message}`, "error", 4000);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openProject = (id) => {
@@ -645,14 +920,35 @@ export default function App() {
             {fields.map((f) => (
               <div key={f.name} className="form-group">
                 <label>{f.label}</label>
-                <input
-                  type={f.type || "text"}
-                  value={values[f.name]}
-                  onChange={(e) => set(f.name, e.target.value)}
-                  placeholder={f.placeholder}
-                  required={f.required}
-                  step={f.type === "number" ? "0.01" : undefined}
-                />
+                {f.type === "select" ? (
+                  <select
+                    value={values[f.name]}
+                    onChange={(e) => set(f.name, e.target.value)}
+                    required={f.required}
+                    style={{
+                      width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', fontFamily: 'inherit',
+                      background: 'var(--bg)', color: 'var(--text)', outline: 'none'
+                    }}
+                  >
+                    {f.placeholder && <option value="">{f.placeholder}</option>}
+                    {(f.options || []).map(opt => {
+                      if (typeof opt === 'object') {
+                        return <option key={opt.id} value={opt.id}>{opt.name}</option>;
+                      }
+                      return <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>;
+                    })}
+                  </select>
+                ) : (
+                  <input
+                    type={f.type || "text"}
+                    value={values[f.name]}
+                    onChange={(e) => set(f.name, e.target.value)}
+                    placeholder={f.placeholder}
+                    required={f.required}
+                    step={f.type === "number" ? "0.01" : undefined}
+                  />
+                )}
               </div>
             ))}
             <div className="modal-actions">
@@ -675,7 +971,9 @@ export default function App() {
                     ? "Update"
                     : title.startsWith("Spend")
                       ? "Record"
-                      : "Add"}
+                      : title.startsWith("Withdraw")
+                        ? "Withdraw"
+                        : "Add"}
               </button>
             </div>
           </form>
@@ -695,7 +993,10 @@ export default function App() {
         count: projects.length,
       },
       { key: "bank", label: "Bank Savings", icon: Icons.bank },
-      { key: "charity", label: "Charity", icon: Icons.charity },
+      { key: "budgets", label: "Budgets", icon: Icons.expense, count: budgets.length },
+      { key: "recurring", label: "Recurring", icon: Icons.revenue },
+      { key: "reports", label: "Reports", icon: Icons.profit },
+      { key: "secretInvestment", label: "Secret Investment", icon: Icons.charity },
     ];
     const handleNavClick = (key) => {
       setView(key);
@@ -728,13 +1029,13 @@ export default function App() {
           <div className="sidebar-stat">
             <div className="sidebar-stat-icon bank-icon">{Icons.bank}</div>
             <div className="sidebar-stat-info">
-              <span>Bank</span>
+              <span>Total in Bank</span>
               <strong
                 className={
-                  globalBank.balance >= 0 ? "text-income" : "text-expense"
+                  totalPhysicalBank >= 0 ? "text-income" : "text-expense"
                 }
               >
-                {currency(globalBank.balance)}
+                {currency(totalPhysicalBank)}
               </strong>
             </div>
           </div>
@@ -743,13 +1044,13 @@ export default function App() {
               {Icons.charity}
             </div>
             <div className="sidebar-stat-info">
-              <span>Charity</span>
+              <span>Secret Investment</span>
               <strong
                 className={
-                  globalCharity.balance >= 0 ? "text-income" : "text-expense"
+                  globalSecretInvestment.balance >= 0 ? "text-income" : "text-expense"
                 }
               >
-                {currency(globalCharity.balance)}
+                {currency(globalSecretInvestment.balance)}
               </strong>
             </div>
           </div>
@@ -845,11 +1146,11 @@ export default function App() {
             </div>
           </div>
           <div className="stat-card">
-            <div className="stat-icon-wrap bg-bank">{Icons.bank}</div>
+            <div className="stat-icon-wrap bg-blue">{Icons.bank}</div>
             <div className="stat-content">
-              <div className="stat-label">Bank Balance</div>
+              <div className="stat-label">Total in Bank</div>
               <div className="stat-value text-bank">
-                {currency(globalBank.balance)}
+                {currency(totalPhysicalBank)}
               </div>
             </div>
           </div>
@@ -881,8 +1182,8 @@ export default function App() {
                   style={{ width: "100%" }}
                 ></div>
                 <div className="dist-info">
-                  <span className="dist-label">Partner 1</span>
-                  <span className="dist-value">{currency(globalPartner1)}</span>
+                  <span className="dist-label">Suhaib</span>
+                  <span className="dist-value">{currency(globalSuhaib)}</span>
                 </div>
               </div>
               <div className="dist-item">
@@ -891,8 +1192,8 @@ export default function App() {
                   style={{ width: "100%" }}
                 ></div>
                 <div className="dist-info">
-                  <span className="dist-label">Partner 2</span>
-                  <span className="dist-value">{currency(globalPartner2)}</span>
+                  <span className="dist-label">Mohammed</span>
+                  <span className="dist-value">{currency(globalMohammed)}</span>
                 </div>
               </div>
               <div className="dist-item">
@@ -901,12 +1202,164 @@ export default function App() {
                   style={{ width: "100%" }}
                 ></div>
                 <div className="dist-info">
-                  <span className="dist-label">Charity</span>
+                  <span className="dist-label">Secret Investment</span>
                   <span className="dist-value">
-                    {currency(globalCharity.income)}
+                    {currency(globalSecretInvestment.income)}
                   </span>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Partner Balances */}
+        {globalProfit > 0 && (
+          <div className="card">
+            <h2 className="section-title">Partner Balances</h2>
+            <p className="section-sub">Track withdrawals from partner shares</p>
+            <div className="stats-grid cols-2" style={{marginTop: '20px'}}>
+              {/* Suhaib Card */}
+              <div className="stat-card">
+                <div className="stat-icon-wrap bg-partner1">{Icons.partner}</div>
+                <div className="stat-content">
+                  <div className="stat-label">Suhaib</div>
+                  <div className="stat-value">{currency(suhaibAvailable)}</div>
+                  <div className="stat-sub">
+                    Earned: {currency(globalSuhaib)} | Withdrawn: {currency(suhaibWithdrawn)}
+                  </div>
+                  <button className="btn btn-primary btn-sm" style={{marginTop: '12px'}}
+                    onClick={() => setModal({
+                      title: "Withdraw — Suhaib",
+                      fields: [
+                        { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                        { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                        { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
+                      ],
+                      onSubmit: (v) => addPartnerWithdrawal("suhaib", v.amount, v.date, v.note),
+                    })}
+                  >
+                    {Icons.plus} <span>Withdraw</span>
+                  </button>
+                </div>
+              </div>
+              {/* Mohammed Card */}
+              <div className="stat-card">
+                <div className="stat-icon-wrap bg-partner2">{Icons.partner}</div>
+                <div className="stat-content">
+                  <div className="stat-label">Mohammed</div>
+                  <div className="stat-value">{currency(mohammedAvailable)}</div>
+                  <div className="stat-sub">
+                    Earned: {currency(globalMohammed)} | Withdrawn: {currency(mohammedWithdrawn)}
+                  </div>
+                  <button className="btn btn-primary btn-sm" style={{marginTop: '12px'}}
+                    onClick={() => setModal({
+                      title: "Withdraw — Mohammed",
+                      fields: [
+                        { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                        { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                        { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
+                      ],
+                      onSubmit: (v) => addPartnerWithdrawal("mohammed", v.amount, v.date, v.note),
+                    })}
+                  >
+                    {Icons.plus} <span>Withdraw</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Withdrawal History */}
+            {partnerWithdrawals.length > 0 && (
+              <div style={{marginTop: '24px'}}>
+                <h3 className="section-title" style={{fontSize: '0.95rem'}}>Withdrawal History</h3>
+                <div className="table-wrap" style={{marginTop: '12px'}}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Partner</th>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Note</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...partnerWithdrawals].reverse().map(w => (
+                        <tr key={w.id}>
+                          <td><span className="cell-project">{w.partnerName === 'suhaib' ? 'Suhaib' : 'Mohammed'}</span></td>
+                          <td>{formatDate(w.date)}</td>
+                          <td><span className="amount-pill expense">{currency(w.amount)}</span></td>
+                          <td>{w.note || <span className="text-muted">-</span>}</td>
+                          <td>
+                            <button className="btn btn-danger-ghost btn-xs"
+                              onClick={() => deletePartnerWithdrawal(w.id, w.amount)}>
+                              {Icons.trash}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Budget & Recurring Quick Summary */}
+        {(budgets.length > 0 || recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
+          <div className="card">
+            <h2 className="section-title">Quick Overview</h2>
+            <p className="section-sub">Budgets and recurring items at a glance</p>
+            <div className="stats-grid cols-4" style={{marginTop: '20px'}}>
+              {budgets.length > 0 && (
+                <>
+                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('budgets')}>
+                    <div className="stat-content">
+                      <div className="stat-label">Budget Allocated</div>
+                      <div className="stat-value">{currency(totalBudgetAllocated)}</div>
+                      <div className="stat-sub">{budgets.length} budget{budgets.length !== 1 ? 's' : ''}</div>
+                    </div>
+                  </div>
+                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('budgets')}>
+                    <div className="stat-content">
+                      <div className="stat-label">Budget Spent</div>
+                      <div className="stat-value text-expense">{currency(totalBudgetSpent)}</div>
+                      <div className="stat-sub">
+                        {totalBudgetAllocated > 0
+                          ? `${Math.round((totalBudgetSpent / totalBudgetAllocated) * 100)}% used`
+                          : '0% used'}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+              {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
+                <>
+                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('recurring')}>
+                    <div className="stat-content">
+                      <div className="stat-label">Recurring Revenue</div>
+                      <div className="stat-value text-income">
+                        {currency(recurringRevenue.filter(r => r.active).reduce((a, r) => a + r.amount, 0))}
+                      </div>
+                      <div className="stat-sub">
+                        {recurringRevenue.filter(r => r.active).length} active / {recurringRevenue.length} total
+                      </div>
+                    </div>
+                  </div>
+                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('recurring')}>
+                    <div className="stat-content">
+                      <div className="stat-label">Recurring Expenses</div>
+                      <div className="stat-value text-expense">
+                        {currency(recurringExpenses.filter(r => r.active).reduce((a, r) => a + r.amount, 0))}
+                      </div>
+                      <div className="stat-sub">
+                        {recurringExpenses.filter(r => r.active).length} active / {recurringExpenses.length} total
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1298,18 +1751,18 @@ export default function App() {
               </div>
               <div className="split-item split-partner1">
                 <div className="split-icon">{Icons.partner}</div>
-                <div className="split-label">Partner 1</div>
-                <div className="split-value">{currency(p.partner1Share)}</div>
+                <div className="split-label">Suhaib</div>
+                <div className="split-value">{currency(p.suhaibShare)}</div>
               </div>
               <div className="split-item split-partner2">
                 <div className="split-icon">{Icons.partner}</div>
-                <div className="split-label">Partner 2</div>
-                <div className="split-value">{currency(p.partner2Share)}</div>
+                <div className="split-label">Mohammed</div>
+                <div className="split-value">{currency(p.mohammedShare)}</div>
               </div>
               <div className="split-item split-charity">
                 <div className="split-icon">{Icons.charity}</div>
-                <div className="split-label">Charity</div>
-                <div className="split-value">{currency(p.charityShare)}</div>
+                <div className="split-label">Secret Investment</div>
+                <div className="split-value">{currency(p.secretInvestmentShare)}</div>
               </div>
             </div>
           </div>
@@ -1505,10 +1958,19 @@ export default function App() {
           </div>
         </div>
 
-        <div className="stats-grid cols-3">
+        <div className="stats-grid cols-4">
+          <div className="stat-card highlight-card" style={{background: 'rgba(66, 133, 244, 0.08)', borderColor: 'rgba(66, 133, 244, 0.2)'}}>
+            <div className="stat-content">
+              <div className="stat-label">Total in Bank</div>
+              <div className="stat-value" style={{color: '#4285f4'}}>
+                {currency(totalPhysicalBank)}
+              </div>
+              <div className="stat-sub">All money in account</div>
+            </div>
+          </div>
           <div className="stat-card highlight-card bg-income-soft">
             <div className="stat-content">
-              <div className="stat-label">Total Accumulated</div>
+              <div className="stat-label">Bank Share (25%)</div>
               <div className="stat-value text-income">
                 {currency(globalBank.income)}
               </div>
@@ -1517,7 +1979,7 @@ export default function App() {
           </div>
           <div className="stat-card highlight-card bg-expense-soft">
             <div className="stat-content">
-              <div className="stat-label">Total Spent</div>
+              <div className="stat-label">Bank Spent</div>
               <div className="stat-value text-expense">
                 {currency(globalBank.spent)}
               </div>
@@ -1529,9 +1991,45 @@ export default function App() {
           </div>
           <div className="stat-card highlight-card bg-bank-soft">
             <div className="stat-content">
-              <div className="stat-label">Current Balance</div>
+              <div className="stat-label">Bank Available</div>
               <div className="stat-value text-bank">
                 {currency(globalBank.balance)}
+              </div>
+              <div className="stat-sub">Share minus spent</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2 className="section-title">Money Allocation</h2>
+          <p className="section-sub">How the total bank balance is distributed</p>
+          <div className="distribution-grid">
+            <div className="dist-item">
+              <div className="dist-bar bg-bank" style={{width: '100%'}}></div>
+              <div className="dist-info">
+                <span className="dist-label">Bank Savings</span>
+                <span className="dist-value">{currency(globalBank.balance)}</span>
+              </div>
+            </div>
+            <div className="dist-item">
+              <div className="dist-bar bg-partner1" style={{width: '100%'}}></div>
+              <div className="dist-info">
+                <span className="dist-label">Suhaib (in bank)</span>
+                <span className="dist-value">{currency(suhaibAvailable)}</span>
+              </div>
+            </div>
+            <div className="dist-item">
+              <div className="dist-bar bg-partner2" style={{width: '100%'}}></div>
+              <div className="dist-info">
+                <span className="dist-label">Mohammed (in bank)</span>
+                <span className="dist-value">{currency(mohammedAvailable)}</span>
+              </div>
+            </div>
+            <div className="dist-item">
+              <div className="dist-bar bg-charity" style={{width: '100%'}}></div>
+              <div className="dist-info">
+                <span className="dist-label">Secret Investment (in bank)</span>
+                <span className="dist-value">{currency(globalSecretInvestment.balance)}</span>
               </div>
             </div>
           </div>
@@ -1651,14 +2149,324 @@ export default function App() {
     );
   }
 
-  // --- Charity View ---
-  function CharityView() {
+  // --- Budgets View ---
+  function BudgetsView() {
     return (
       <div className="fade-in">
         <div className="page-header">
           <div>
-            <h1 className="page-title">Charity</h1>
-            <p className="page-sub">25% of all project profits go to charity</p>
+            <h1 className="page-title">Budgets</h1>
+            <p className="page-sub">
+              {budgets.length} budget{budgets.length !== 1 ? "s" : ""} total
+            </p>
+          </div>
+          <button
+            className="btn btn-primary"
+            onClick={() =>
+              setModal({
+                title: "New Budget",
+                fields: [
+                  { name: "name", label: "Budget Name", placeholder: "e.g. Marketing", required: true },
+                  { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                  { name: "description", label: "Description", placeholder: "Budget description" },
+                ],
+                onSubmit: (v) => addBudget(v.name, v.allocatedAmount, v.description),
+              })
+            }
+          >
+            {Icons.plus} <span>New Budget</span>
+          </button>
+        </div>
+
+        <div className="stats-grid cols-3">
+          <div className="stat-card highlight-card bg-income-soft">
+            <div className="stat-content">
+              <div className="stat-label">Total Allocated</div>
+              <div className="stat-value text-income">{currency(totalBudgetAllocated)}</div>
+              <div className="stat-sub">Across {budgets.length} budget{budgets.length !== 1 ? "s" : ""}</div>
+            </div>
+          </div>
+          <div className="stat-card highlight-card bg-expense-soft">
+            <div className="stat-content">
+              <div className="stat-label">Total Spent</div>
+              <div className="stat-value text-expense">{currency(totalBudgetSpent)}</div>
+            </div>
+          </div>
+          <div className="stat-card highlight-card bg-bank-soft">
+            <div className="stat-content">
+              <div className="stat-label">Total Remaining</div>
+              <div className="stat-value" style={{color: (totalBudgetAllocated - totalBudgetSpent) >= 0 ? 'var(--income)' : 'var(--expense)'}}>
+                {currency(totalBudgetAllocated - totalBudgetSpent)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {budgetStats.length === 0 ? (
+          <div className="empty-state-card">
+            <div className="empty-icon">{Icons.empty}</div>
+            <h3>No budgets yet</h3>
+            <p>Click "New Budget" above to create your first one.</p>
+          </div>
+        ) : (
+          <div className="project-grid">
+            {budgetStats.map(b => {
+              const pct = b.allocatedAmount > 0 ? Math.min(100, (b.spent / b.allocatedAmount) * 100) : 0;
+              return (
+                <div key={b.id} className="card">
+                  <div className="card-header">
+                    <div>
+                      <h3 className="section-title">{b.name}</h3>
+                      {b.description && <p className="section-sub">{b.description}</p>}
+                    </div>
+                    <div style={{display:'flex', gap:'6px'}}>
+                      <button className="btn btn-ghost btn-xs" onClick={() => setModal({
+                        title: "Edit Budget",
+                        fields: [
+                          { name: "name", label: "Budget Name", default: b.name, required: true },
+                          { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", default: String(b.allocatedAmount), required: true },
+                          { name: "description", label: "Description", default: b.description || "", placeholder: "Budget description" },
+                        ],
+                        onSubmit: (v) => editBudget(b.id, v.name, v.allocatedAmount, v.description),
+                      })}>{Icons.edit}</button>
+                      <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteBudget(b.id, b.name)}>{Icons.trash}</button>
+                    </div>
+                  </div>
+
+                  <div style={{marginBottom:'16px'}}>
+                    <div className="progress-header">
+                      <span>Budget Usage</span>
+                      <span>{Math.round(pct)}%</span>
+                    </div>
+                    <div className="progress-bar">
+                      <div className="progress-fill" style={{width: `${pct}%`, background: pct > 90 ? 'linear-gradient(90deg, var(--expense), #f87171)' : undefined}}></div>
+                    </div>
+                  </div>
+
+                  <div className="stats-grid cols-3" style={{marginBottom:'16px'}}>
+                    <div style={{textAlign:'center'}}>
+                      <div className="stat-label">Allocated</div>
+                      <div style={{fontSize:'1.05rem', fontWeight:600}}>{currency(b.allocatedAmount)}</div>
+                    </div>
+                    <div style={{textAlign:'center'}}>
+                      <div className="stat-label">Spent</div>
+                      <div style={{fontSize:'1.05rem', fontWeight:600}} className="text-expense">{currency(b.spent)}</div>
+                    </div>
+                    <div style={{textAlign:'center'}}>
+                      <div className="stat-label">Remaining</div>
+                      <div style={{fontSize:'1.05rem', fontWeight:600}} className={b.remaining >= 0 ? 'text-income' : 'text-expense'}>{currency(b.remaining)}</div>
+                    </div>
+                  </div>
+
+                  <button className="btn btn-primary btn-sm" onClick={() => setModal({
+                    title: "Add Spending — " + b.name,
+                    fields: [
+                      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                      { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                      { name: "description", label: "Description", placeholder: "What was this for?", required: true },
+                    ],
+                    onSubmit: (v) => addBudgetSpending(b.id, v.amount, v.date, v.description),
+                  })}>
+                    {Icons.plus} <span>Add Spending</span>
+                  </button>
+
+                  {/* Spending history */}
+                  {(b.spending || []).length > 0 && (
+                    <div className="table-wrap" style={{marginTop:'16px'}}>
+                      <table>
+                        <thead><tr><th>Date</th><th>Amount</th><th>Description</th><th></th></tr></thead>
+                        <tbody>
+                          {[...(b.spending || [])].reverse().map(s => (
+                            <tr key={s.id}>
+                              <td>{formatDate(s.date)}</td>
+                              <td><span className="amount-pill expense">{currency(s.amount)}</span></td>
+                              <td>{s.description}</td>
+                              <td><button className="btn btn-danger-ghost btn-xs" onClick={() => deleteBudgetSpending(s.id, s.amount)}>{Icons.trash}</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // --- Recurring View ---
+  function RecurringView() {
+    return (
+      <div className="fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Recurring</h1>
+            <p className="page-sub">
+              {recurringRevenue.length} revenue &middot; {recurringExpenses.length} expense items
+            </p>
+          </div>
+        </div>
+
+        {/* Recurring Revenue Section */}
+        <div className="card" style={{marginBottom: '24px'}}>
+          <div className="card-header">
+            <h3 className="section-title">Recurring Revenue</h3>
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                setModal({
+                  title: "Add Recurring Revenue",
+                  fields: [
+                    { name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true },
+                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
+                    { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                  ],
+                  onSubmit: (v) => addRecurringRevenue(v.projectId || null, v.amount, v.frequency, v.description, v.startDate),
+                })
+              }
+            >
+              {Icons.plus} <span>Add Revenue</span>
+            </button>
+          </div>
+          {recurringRevenue.length === 0 ? (
+            <div className="empty-state-card">
+              <div className="empty-icon">{Icons.empty}</div>
+              <h3>No recurring revenue</h3>
+              <p>Click "Add Revenue" to add a recurring revenue stream.</p>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Amount</th>
+                    <th>Frequency</th>
+                    <th>Project</th>
+                    <th>Next Due</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recurringRevenue.map((item) => (
+                    <tr key={item.id}>
+                      <td style={{fontWeight: 500}}>{item.description}</td>
+                      <td className="text-income">{currency(item.amount)}</td>
+                      <td>{item.frequency.charAt(0).toUpperCase() + item.frequency.slice(1)}</td>
+                      <td>{projects.find(p => p.id === item.projectId)?.name || 'General'}</td>
+                      <td>{formatDate(item.nextDue)}</td>
+                      <td>
+                        <button
+                          className={`badge ${item.active ? 'badge-income' : 'badge-muted'}`}
+                          style={{cursor: 'pointer', border: 'none'}}
+                          onClick={() => toggleRecurringRevenue(item.id, item.active)}
+                        >
+                          {item.active ? 'Active' : 'Paused'}
+                        </button>
+                      </td>
+                      <td>
+                        <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteRecurringRevenue(item.id, item.description)}>
+                          {Icons.trash}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Recurring Expenses Section */}
+        <div className="card">
+          <div className="card-header">
+            <h3 className="section-title">Recurring Expenses</h3>
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                setModal({
+                  title: "Add Recurring Expense",
+                  fields: [
+                    { name: "description", label: "Description", placeholder: "e.g. Office rent", required: true },
+                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
+                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
+                    { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                  ],
+                  onSubmit: (v) => addRecurringExpense(v.projectId || null, v.amount, v.frequency, v.description, v.startDate),
+                })
+              }
+            >
+              {Icons.plus} <span>Add Expense</span>
+            </button>
+          </div>
+          {recurringExpenses.length === 0 ? (
+            <div className="empty-state-card">
+              <div className="empty-icon">{Icons.empty}</div>
+              <h3>No recurring expenses</h3>
+              <p>Click "Add Expense" to add a recurring expense.</p>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Amount</th>
+                    <th>Frequency</th>
+                    <th>Project</th>
+                    <th>Next Due</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recurringExpenses.map((item) => (
+                    <tr key={item.id}>
+                      <td style={{fontWeight: 500}}>{item.description}</td>
+                      <td className="text-expense">{currency(item.amount)}</td>
+                      <td>{item.frequency.charAt(0).toUpperCase() + item.frequency.slice(1)}</td>
+                      <td>{projects.find(p => p.id === item.projectId)?.name || 'General'}</td>
+                      <td>{formatDate(item.nextDue)}</td>
+                      <td>
+                        <button
+                          className={`badge ${item.active ? 'badge-income' : 'badge-muted'}`}
+                          style={{cursor: 'pointer', border: 'none'}}
+                          onClick={() => toggleRecurringExpense(item.id, item.active)}
+                        >
+                          {item.active ? 'Active' : 'Paused'}
+                        </button>
+                      </td>
+                      <td>
+                        <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteRecurringExpense(item.id, item.description)}>
+                          {Icons.trash}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // --- Secret Investment View ---
+  function SecretInvestmentView() {
+    return (
+      <div className="fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Secret Investment</h1>
+            <p className="page-sub">25% of all project profits go to secret investment</p>
           </div>
         </div>
 
@@ -1667,7 +2475,7 @@ export default function App() {
             <div className="stat-content">
               <div className="stat-label">Total Accumulated</div>
               <div className="stat-value text-income">
-                {currency(globalCharity.income)}
+                {currency(globalSecretInvestment.income)}
               </div>
               <div className="stat-sub">From project profits</div>
             </div>
@@ -1676,11 +2484,11 @@ export default function App() {
             <div className="stat-content">
               <div className="stat-label">Total Spent</div>
               <div className="stat-value text-expense">
-                {currency(globalCharity.spent)}
+                {currency(globalSecretInvestment.spent)}
               </div>
               <div className="stat-sub">
-                {charitySpending.length} transaction
-                {charitySpending.length !== 1 ? "s" : ""}
+                {secretInvestmentSpending.length} transaction
+                {secretInvestmentSpending.length !== 1 ? "s" : ""}
               </div>
             </div>
           </div>
@@ -1688,7 +2496,7 @@ export default function App() {
             <div className="stat-content">
               <div className="stat-label">Current Balance</div>
               <div className="stat-value text-charity">
-                {currency(globalCharity.balance)}
+                {currency(globalSecretInvestment.balance)}
               </div>
             </div>
           </div>
@@ -1704,7 +2512,7 @@ export default function App() {
               className="btn btn-primary btn-sm"
               onClick={() =>
                 setModal({
-                  title: "Spend from Charity",
+                  title: "Spend from Secret Investment",
                   fields: [
                     {
                       name: "amount",
@@ -1728,16 +2536,16 @@ export default function App() {
                     },
                   ],
                   onSubmit: (v) =>
-                    addCharitySpending(v.amount, v.date, v.description),
+                    addSecretInvestmentSpending(v.amount, v.date, v.description),
                 })
               }
             >
               {Icons.plus} <span>Record Spending</span>
             </button>
           </div>
-          {charitySpending.length === 0 ? (
+          {secretInvestmentSpending.length === 0 ? (
             <p className="text-muted-block">
-              No spending recorded from charity funds yet.
+              No spending recorded from secret investment funds yet.
             </p>
           ) : (
             <div className="table-wrap">
@@ -1751,7 +2559,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...charitySpending].reverse().map((s) => (
+                  {[...secretInvestmentSpending].reverse().map((s) => (
                     <tr key={s.id}>
                       <td>{formatDate(s.date)}</td>
                       <td>
@@ -1763,7 +2571,7 @@ export default function App() {
                       <td>
                         <button
                           className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteCharitySpending(s.id, s.amount)}
+                          onClick={() => deleteSecretInvestmentSpending(s.id, s.amount)}
                         >
                           {Icons.trash}
                         </button>
@@ -1779,16 +2587,16 @@ export default function App() {
         <div className="card">
           <h2 className="section-title">Contributions by Project</h2>
           <p className="section-sub">
-            How much each project contributed to charity
+            How much each project contributed to secret investment
           </p>
-          {projectStats.filter((p) => p.charityShare > 0).length === 0 ? (
+          {projectStats.filter((p) => p.secretInvestmentShare > 0).length === 0 ? (
             <p className="text-muted-block">
               No contributions yet. Profits from projects will appear here.
             </p>
           ) : (
             <div className="contributions-list">
               {projectStats
-                .filter((p) => p.charityShare > 0)
+                .filter((p) => p.secretInvestmentShare > 0)
                 .map((p) => (
                   <div
                     key={p.id}
@@ -1797,10 +2605,280 @@ export default function App() {
                   >
                     <span className="contribution-name">{p.name}</span>
                     <span className="contribution-amount text-income">
-                      {currency(p.charityShare)}
+                      {currency(p.secretInvestmentShare)}
                     </span>
                   </div>
                 ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function ReportsView() {
+    const filterByMonth = (dateStr) => {
+      if (!dateStr) return false;
+      return dateStr.startsWith(reportMonth);
+    };
+
+    // Monthly payments (revenue)
+    const monthlyPayments = projectStats.flatMap(p =>
+      (p.payments || []).filter(pay => filterByMonth(pay.date))
+    );
+    const monthlyRevenue = monthlyPayments.reduce((a, p) => a + p.amount, 0);
+
+    // Monthly project expenses
+    const monthlyProjectExpenses = projectStats.flatMap(p =>
+      (p.expenses || []).filter(exp => filterByMonth(exp.date))
+    );
+    const monthlyExpenses = monthlyProjectExpenses.reduce((a, e) => a + e.amount, 0);
+
+    // Monthly bank spending
+    const monthlyBankSpending = bankSpending.filter(s => filterByMonth(s.date));
+    const monthlyBankSpent = monthlyBankSpending.reduce((a, s) => a + s.amount, 0);
+
+    // Monthly secret investment spending
+    const monthlySecretSpending = secretInvestmentSpending.filter(s => filterByMonth(s.date));
+    const monthlySecretSpent = monthlySecretSpending.reduce((a, s) => a + s.amount, 0);
+
+    // Monthly partner withdrawals
+    const monthlySuhaibWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'suhaib' && filterByMonth(w.date));
+    const monthlyMohammedWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'mohammed' && filterByMonth(w.date));
+    const monthlySuhaibWithdrawn = monthlySuhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
+    const monthlyMohammedWithdrawn = monthlyMohammedWithdrawals.reduce((a, w) => a + w.amount, 0);
+
+    // Monthly budget spending
+    const monthlyBudgetSpending = budgetStats.flatMap(b =>
+      (b.spending || []).filter(s => filterByMonth(s.date))
+    );
+    const monthlyBudgetSpent = monthlyBudgetSpending.reduce((a, s) => a + s.amount, 0);
+
+    const monthlyProfit = monthlyRevenue - monthlyExpenses;
+    const monthlyTotalOutflow = monthlyExpenses + monthlyBankSpent + monthlySecretSpent + monthlySuhaibWithdrawn + monthlyMohammedWithdrawn + monthlyBudgetSpent;
+
+    return (
+      <div className="fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Reports</h1>
+            <p className="page-sub">Financial reports and analytics</p>
+          </div>
+          <input type="month" value={reportMonth} onChange={e => setReportMonth(e.target.value)}
+            style={{padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: 'var(--radius-sm)',
+            fontSize: '0.9rem', fontFamily: 'inherit', background: 'var(--bg)', color: 'var(--text)', outline: 'none'}} />
+        </div>
+
+        {/* Report 1: Monthly Profit & Loss */}
+        <div className="card">
+          <h2 className="section-title">Profit & Loss — {new Date(reportMonth + '-01').toLocaleDateString('en-US', {month: 'long', year: 'numeric'})}</h2>
+          <p className="section-sub">Revenue vs expenses for the selected month</p>
+          <div className="stats-grid cols-4" style={{marginTop: '20px'}}>
+            <div className="stat-card highlight-card bg-income-soft">
+              <div className="stat-content"><div className="stat-label">Revenue</div><div className="stat-value text-income">{currency(monthlyRevenue)}</div><div className="stat-sub">{monthlyPayments.length} payment{monthlyPayments.length !== 1 ? 's' : ''}</div></div>
+            </div>
+            <div className="stat-card highlight-card bg-expense-soft">
+              <div className="stat-content"><div className="stat-label">Project Expenses</div><div className="stat-value text-expense">{currency(monthlyExpenses)}</div><div className="stat-sub">{monthlyProjectExpenses.length} expense{monthlyProjectExpenses.length !== 1 ? 's' : ''}</div></div>
+            </div>
+            <div className="stat-card highlight-card" style={{background: monthlyProfit >= 0 ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #fef2f2, #fee2e2)'}}>
+              <div className="stat-content"><div className="stat-label">Net Profit</div><div className="stat-value" style={{color: monthlyProfit >= 0 ? 'var(--income)' : 'var(--expense)'}}>{currency(monthlyProfit)}</div></div>
+            </div>
+            <div className="stat-card highlight-card bg-bank-soft">
+              <div className="stat-content"><div className="stat-label">Total Outflow</div><div className="stat-value text-bank">{currency(monthlyTotalOutflow)}</div><div className="stat-sub">All spending combined</div></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Report 2: Partner Summary */}
+        <div className="card">
+          <h2 className="section-title">Partner Summary</h2>
+          <p className="section-sub">All-time earnings and withdrawals</p>
+          <div className="stats-grid cols-2" style={{marginTop: '20px'}}>
+            <div className="stat-card">
+              <div className="stat-icon-wrap bg-partner1">{Icons.partner}</div>
+              <div className="stat-content">
+                <div className="stat-label">Suhaib</div>
+                <div className="stat-value">{currency(suhaibAvailable)}</div>
+                <div className="stat-sub">Earned: {currency(globalSuhaib)} · Withdrawn: {currency(suhaibWithdrawn)}</div>
+                {monthlySuhaibWithdrawn > 0 && <div className="stat-sub">This month: {currency(monthlySuhaibWithdrawn)} withdrawn</div>}
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon-wrap bg-partner2">{Icons.partner}</div>
+              <div className="stat-content">
+                <div className="stat-label">Mohammed</div>
+                <div className="stat-value">{currency(mohammedAvailable)}</div>
+                <div className="stat-sub">Earned: {currency(globalMohammed)} · Withdrawn: {currency(mohammedWithdrawn)}</div>
+                {monthlyMohammedWithdrawn > 0 && <div className="stat-sub">This month: {currency(monthlyMohammedWithdrawn)} withdrawn</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Report 3: Budget Utilization */}
+        <div className="card">
+          <h2 className="section-title">Budget Utilization</h2>
+          <p className="section-sub">How budgets are being used</p>
+          {budgetStats.length === 0 ? (
+            <p className="text-muted-block">No budgets created yet.</p>
+          ) : (
+            <div style={{marginTop: '16px'}}>
+              {budgetStats.map(b => {
+                const pct = b.allocatedAmount > 0 ? Math.min(100, (b.spent / b.allocatedAmount) * 100) : 0;
+                return (
+                  <div key={b.id} style={{marginBottom: '16px', padding: '16px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)'}}>
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px'}}>
+                      <span style={{fontWeight:600, fontSize:'0.9rem'}}>{b.name}</span>
+                      <span style={{fontSize:'0.82rem', color:'var(--text-secondary)'}}>{currency(b.spent)} / {currency(b.allocatedAmount)}</span>
+                    </div>
+                    <div className="progress-bar">
+                      <div className="progress-fill" style={{width:`${pct}%`, background: pct > 90 ? 'linear-gradient(90deg, var(--expense), #f87171)' : pct > 70 ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : undefined}}></div>
+                    </div>
+                    <div style={{display:'flex', justifyContent:'space-between', marginTop:'4px', fontSize:'0.75rem', color:'var(--text-muted)'}}>
+                      <span>{Math.round(pct)}% used</span>
+                      <span>{currency(b.remaining)} remaining</span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{marginTop:'16px', padding:'12px 16px', background:'var(--bg)', borderRadius:'var(--radius-sm)', display:'flex', justifyContent:'space-between'}}>
+                <span style={{fontWeight:600}}>Total</span>
+                <span style={{fontWeight:600}}>{currency(totalBudgetSpent)} / {currency(totalBudgetAllocated)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Report 3b: Recurring Obligations */}
+        {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
+          <div className="card">
+            <h2 className="section-title">Recurring Obligations</h2>
+            <p className="section-sub">Active recurring revenue and expenses</p>
+            <div className="stats-grid cols-3" style={{marginTop: '20px'}}>
+              <div className="stat-card highlight-card bg-income-soft">
+                <div className="stat-content">
+                  <div className="stat-label">Monthly Revenue</div>
+                  <div className="stat-value text-income">
+                    {currency(recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0))}
+                  </div>
+                  <div className="stat-sub">{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length} active</div>
+                </div>
+              </div>
+              <div className="stat-card highlight-card bg-expense-soft">
+                <div className="stat-content">
+                  <div className="stat-label">Monthly Expenses</div>
+                  <div className="stat-value text-expense">
+                    {currency(recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0))}
+                  </div>
+                  <div className="stat-sub">{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length} active</div>
+                </div>
+              </div>
+              <div className="stat-card highlight-card bg-bank-soft">
+                <div className="stat-content">
+                  <div className="stat-label">Net Monthly Recurring</div>
+                  <div className="stat-value" style={{color:
+                    (recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0) -
+                     recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0)) >= 0
+                    ? 'var(--income)' : 'var(--expense)'}}>
+                    {currency(
+                      recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0) -
+                      recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0)
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            {recurringRevenue.filter(r => r.active && r.frequency === 'yearly').length > 0 || recurringExpenses.filter(r => r.active && r.frequency === 'yearly').length > 0 ? (
+              <div style={{marginTop:'16px', padding:'12px 16px', background:'var(--bg)', borderRadius:'var(--radius-sm)', fontSize:'0.85rem', color:'var(--text-secondary)'}}>
+                Yearly: {currency(recurringRevenue.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0))} revenue
+                {' '}&middot;{' '}
+                {currency(recurringExpenses.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0))} expenses
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {/* Report 4: Cash Flow Summary */}
+        <div className="card">
+          <h2 className="section-title">Cash Flow Summary</h2>
+          <p className="section-sub">All-time money movement</p>
+          <div className="table-wrap" style={{marginTop: '16px'}}>
+            <table>
+              <thead><tr><th>Category</th><th>Inflow</th><th>Outflow</th><th>Net</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><span className="cell-project">Project Revenue</span></td>
+                  <td className="text-income">{currency(globalRevenue)}</td>
+                  <td>-</td>
+                  <td className="text-income">{currency(globalRevenue)}</td>
+                </tr>
+                <tr>
+                  <td><span className="cell-project">Project Expenses</span></td>
+                  <td>-</td>
+                  <td className="text-expense">{currency(globalExpenses)}</td>
+                  <td className="text-expense">-{currency(globalExpenses)}</td>
+                </tr>
+                <tr>
+                  <td><span className="cell-project">Bank Spending</span></td>
+                  <td>-</td>
+                  <td className="text-expense">{currency(globalBank.spent)}</td>
+                  <td className="text-expense">-{currency(globalBank.spent)}</td>
+                </tr>
+                <tr>
+                  <td><span className="cell-project">Secret Investment Spending</span></td>
+                  <td>-</td>
+                  <td className="text-expense">{currency(globalSecretInvestment.spent)}</td>
+                  <td className="text-expense">-{currency(globalSecretInvestment.spent)}</td>
+                </tr>
+                <tr>
+                  <td><span className="cell-project">Partner Withdrawals</span></td>
+                  <td>-</td>
+                  <td className="text-expense">{currency(suhaibWithdrawn + mohammedWithdrawn)}</td>
+                  <td className="text-expense">-{currency(suhaibWithdrawn + mohammedWithdrawn)}</td>
+                </tr>
+                <tr>
+                  <td><span className="cell-project">Budget Spending</span></td>
+                  <td>-</td>
+                  <td className="text-expense">{currency(totalBudgetSpent)}</td>
+                  <td className="text-expense">-{currency(totalBudgetSpent)}</td>
+                </tr>
+                <tr style={{borderTop:'2px solid var(--border)', fontWeight:700}}>
+                  <td>Net Cash Position</td>
+                  <td className="text-income">{currency(globalRevenue)}</td>
+                  <td className="text-expense">{currency(globalExpenses + globalBank.spent + globalSecretInvestment.spent + suhaibWithdrawn + mohammedWithdrawn + totalBudgetSpent)}</td>
+                  <td className={totalPhysicalBank >= 0 ? 'text-income' : 'text-expense'} style={{fontWeight:700}}>{currency(totalPhysicalBank)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Report 5: Project Performance */}
+        <div className="card">
+          <h2 className="section-title">Project Performance</h2>
+          <p className="section-sub">Profitability breakdown by project</p>
+          {projectStats.length === 0 ? (
+            <p className="text-muted-block">No projects yet.</p>
+          ) : (
+            <div className="table-wrap" style={{marginTop: '16px'}}>
+              <table>
+                <thead><tr><th>Project</th><th>Value</th><th>Revenue</th><th>Expenses</th><th>Profit</th><th>Margin</th></tr></thead>
+                <tbody>
+                  {projectStats.slice().reverse().map(p => {
+                    const margin = p.totalPaid > 0 ? ((p.profit / p.totalPaid) * 100).toFixed(1) : '0.0';
+                    return (
+                      <tr key={p.id} className="clickable-row" onClick={() => openProject(p.id)}>
+                        <td><span className="cell-project">{p.name}</span></td>
+                        <td>{currency(p.totalValue)}</td>
+                        <td className="text-income">{currency(p.totalPaid)}</td>
+                        <td className="text-expense">{currency(p.totalExpenses)}</td>
+                        <td className={p.profit >= 0 ? 'text-income font-semibold' : 'text-expense font-semibold'}>{currency(p.profit)}</td>
+                        <td><span className={`badge ${parseFloat(margin) >= 50 ? 'badge-income' : parseFloat(margin) >= 0 ? 'badge-warning' : 'badge-muted'}`}>{margin}%</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -1847,7 +2925,10 @@ export default function App() {
         {view === "projects" && <ProjectsView />}
         {view === "project" && <ProjectDetailView />}
         {view === "bank" && <BankView />}
-        {view === "charity" && <CharityView />}
+        {view === "budgets" && <BudgetsView />}
+        {view === "recurring" && <RecurringView />}
+        {view === "reports" && <ReportsView />}
+        {view === "secretInvestment" && <SecretInvestmentView />}
       </main>
       {modal && <ModalForm {...modal} onClose={() => setModal(null)} />}
       {/* Enhanced Toast */}
