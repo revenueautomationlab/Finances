@@ -6,3 +6,7 @@ dist
 *.log
 .vite
 .DS_Store
+
+# Supabase local dev (keep migrations and config)
+supabase/.temp
+supabase/.branches
