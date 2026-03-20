@@ -30,14 +30,28 @@ CREATE INDEX IF NOT EXISTS idx_recurring_expenses_next_due ON recurring_expenses
 ALTER TABLE recurring_revenue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recurring_expenses ENABLE ROW LEVEL SECURITY;
 
--- RLS policies for recurring_revenue
-CREATE POLICY "Auth read recurring_revenue" ON recurring_revenue FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Auth insert recurring_revenue" ON recurring_revenue FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Auth update recurring_revenue" ON recurring_revenue FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Auth delete recurring_revenue" ON recurring_revenue FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Auth read recurring_revenue" ON recurring_revenue FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth insert recurring_revenue" ON recurring_revenue FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth update recurring_revenue" ON recurring_revenue FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth delete recurring_revenue" ON recurring_revenue FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- RLS policies for recurring_expenses
-CREATE POLICY "Auth read recurring_expenses" ON recurring_expenses FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Auth insert recurring_expenses" ON recurring_expenses FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Auth update recurring_expenses" ON recurring_expenses FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "Auth delete recurring_expenses" ON recurring_expenses FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Auth read recurring_expenses" ON recurring_expenses FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth insert recurring_expenses" ON recurring_expenses FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth update recurring_expenses" ON recurring_expenses FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Auth delete recurring_expenses" ON recurring_expenses FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
