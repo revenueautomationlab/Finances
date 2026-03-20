@@ -352,7 +352,6 @@ html {
 }
 
 .sidebar-overlay {
-  display: none;
   position: fixed;
   top: 0;
   left: 0;
@@ -890,6 +889,7 @@ tbody tr:last-child td {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 7px;
   border-radius: var(--radius-sm);
   font-weight: 550;
   cursor: pointer;
@@ -899,6 +899,8 @@ tbody tr:last-child td {
   font-size: 0.9rem;
   padding: 11px 20px;
   font-family: inherit;
+  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .btn:active {
@@ -922,21 +924,6 @@ tbody tr:last-child td {
 
 .btn-icon:hover {
   background: var(--bg);
-}
-*/ .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 18px;
-  font-size: 0.875rem;
-  font-weight: 550;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all var(--transition);
-  white-space: nowrap;
-  font-family: inherit;
-  line-height: 1.4;
 }
 
 .btn svg {
@@ -1169,6 +1156,12 @@ tbody tr:last-child td {
 
 .form-group input::placeholder {
   color: var(--text-muted);
+}
+
+.modal input:required:invalid:not(:focus):not(:placeholder-shown),
+.modal select:required:invalid:not(:focus) {
+  border-color: #e53e3e;
+  box-shadow: 0 0 0 1px #e53e3e;
 }
 
 .modal-actions {
@@ -1484,10 +1477,6 @@ tbody tr:last-child td {
   }
 
   .sidebar-overlay {
-    display: none;
-  }
-
-  .sidebar-overlay.active {
     display: block;
   }
 

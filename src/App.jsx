@@ -354,13 +354,23 @@ export default function App() {
         (a, x) => a + x.amount,
         0,
       );
-      const profit = totalPaid - totalExpenses;
+      // Add active recurring items linked to this project
+      const projRecurringRev = recurringRevenue
+        .filter(r => r.active && r.projectId === p.id)
+        .reduce((a, r) => a + r.amount, 0);
+      const projRecurringExp = recurringExpenses
+        .filter(r => r.active && r.projectId === p.id)
+        .reduce((a, r) => a + r.amount, 0);
+      const totalRevenue = totalPaid + projRecurringRev;
+      const totalExp = totalExpenses + projRecurringExp;
+      const profit = totalRevenue - totalExp;
       const share = profit > 0 ? profit * 0.25 : 0;
       return {
         ...p,
         totalPaid,
+        totalRevenue,
         unpaid,
-        totalExpenses,
+        totalExpenses: totalExp,
         profit,
         bankShare: share,
         suhaibShare: share,
@@ -368,25 +378,35 @@ export default function App() {
         secretInvestmentShare: share,
       };
     });
-  }, [projects]);
+  }, [projects, recurringRevenue, recurringExpenses]);
+
+  // General recurring items (not linked to any project) — still get profit-split
+  const generalRecurringRev = recurringRevenue
+    .filter(r => r.active && !r.projectId)
+    .reduce((a, r) => a + r.amount, 0);
+  const generalRecurringExp = recurringExpenses
+    .filter(r => r.active && !r.projectId)
+    .reduce((a, r) => a + r.amount, 0);
+  const generalRecurringProfit = generalRecurringRev - generalRecurringExp;
+  const generalRecurringShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0;
 
   const globalBank = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.bankShare, 0);
+    const income = projectStats.reduce((a, p) => a + p.bankShare, 0) + generalRecurringShare;
     const spent = bankSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, bankSpending]);
+  }, [projectStats, bankSpending, generalRecurringShare]);
 
   const globalSecretInvestment = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0);
+    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0) + generalRecurringShare;
     const spent = secretInvestmentSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, secretInvestmentSpending]);
+  }, [projectStats, secretInvestmentSpending, generalRecurringShare]);
 
-  const globalProfit = projectStats.reduce((a, p) => a + p.profit, 0);
-  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0);
-  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0);
-  const globalRevenue = projectStats.reduce((a, p) => a + p.totalPaid, 0);
-  const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0);
+  const globalProfit = projectStats.reduce((a, p) => a + p.profit, 0) + generalRecurringProfit;
+  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0) + generalRecurringShare;
+  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringShare;
+  const globalRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0) + generalRecurringRev;
+  const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0) + generalRecurringExp;
   const suhaibWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'suhaib');
   const mohammedWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'mohammed');
   const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
@@ -403,6 +423,9 @@ export default function App() {
 
   // Total money physically in the bank
   const totalPhysicalBank = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - globalSecretInvestment.spent - globalBank.spent - totalBudgetSpent;
+
+  // Spendable = bank's 25% share minus bank spending AND budget spending (budgets come from bank share)
+  const bankSpendable = globalBank.income - globalBank.spent - totalBudgetSpent;
 
   const selectedProject =
     projectStats.find((p) => p.id === selectedProjectId) || null;
@@ -905,7 +928,6 @@ export default function App() {
     const handleSubmit = (e) => {
       e.preventDefault();
       onSubmit(values);
-      onClose();
     };
     return (
       <div className="modal-overlay" onClick={onClose}>
@@ -1053,6 +1075,10 @@ export default function App() {
                 {currency(globalSecretInvestment.balance)}
               </strong>
             </div>
+          </div>
+          <div style={{marginTop: '8px', padding: '6px 10px', background: 'rgba(66, 133, 244, 0.06)', borderRadius: '6px'}}>
+            <div style={{fontSize: '11px', color: '#718096', marginBottom: '2px'}}>Spendable (Bank Share)</div>
+            <div style={{fontSize: '13px', fontWeight: 600, color: bankSpendable >= 0 ? '#38a169' : '#e53e3e'}}>{currency(bankSpendable)}</div>
           </div>
           <div
             style={{
@@ -1235,7 +1261,7 @@ export default function App() {
                         { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                         { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
                       ],
-                      onSubmit: (v) => addPartnerWithdrawal("suhaib", v.amount, v.date, v.note),
+                      onSubmit: (v) => addPartnerWithdrawal("suhaib", parseFloat(v.amount), v.date, v.note),
                     })}
                   >
                     {Icons.plus} <span>Withdraw</span>
@@ -1259,7 +1285,7 @@ export default function App() {
                         { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                         { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
                       ],
-                      onSubmit: (v) => addPartnerWithdrawal("mohammed", v.amount, v.date, v.note),
+                      onSubmit: (v) => addPartnerWithdrawal("mohammed", parseFloat(v.amount), v.date, v.note),
                     })}
                   >
                     {Icons.plus} <span>Withdraw</span>
@@ -1403,7 +1429,7 @@ export default function App() {
                         required: true,
                       },
                     ],
-                    onSubmit: (v) => addProject(v.name, v.totalValue),
+                    onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)),
                   });
                 }}
               >
@@ -1509,7 +1535,7 @@ export default function App() {
                     required: true,
                   },
                 ],
-                onSubmit: (v) => addProject(v.name, v.totalValue),
+                onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)),
               })
             }
           >
@@ -1675,7 +1701,7 @@ export default function App() {
                       required: true,
                     },
                   ],
-                  onSubmit: (v) => editProject(p.id, v.name, v.totalValue),
+                  onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)),
                 })
               }
             >
@@ -1804,7 +1830,7 @@ export default function App() {
                       placeholder: "Payment note (optional)",
                     },
                   ],
-                  onSubmit: (v) => addPayment(p.id, v.amount, v.date, v.note),
+                  onSubmit: (v) => addPayment(p.id, parseFloat(v.amount), v.date, v.note),
                 })
               }
             >
@@ -1894,7 +1920,7 @@ export default function App() {
                     },
                   ],
                   onSubmit: (v) =>
-                    addExpense(p.id, v.amount, v.date, v.description),
+                    addExpense(p.id, parseFloat(v.amount), v.date, v.description),
                 })
               }
             >
@@ -1993,9 +2019,9 @@ export default function App() {
             <div className="stat-content">
               <div className="stat-label">Bank Available</div>
               <div className="stat-value text-bank">
-                {currency(globalBank.balance)}
+                {currency(bankSpendable)}
               </div>
-              <div className="stat-sub">Share minus spent</div>
+              <div className="stat-sub">Share minus bank &amp; budget spent</div>
             </div>
           </div>
         </div>
@@ -2007,8 +2033,8 @@ export default function App() {
             <div className="dist-item">
               <div className="dist-bar bg-bank" style={{width: '100%'}}></div>
               <div className="dist-info">
-                <span className="dist-label">Bank Savings</span>
-                <span className="dist-value">{currency(globalBank.balance)}</span>
+                <span className="dist-label">Bank Savings (spendable)</span>
+                <span className="dist-value">{currency(bankSpendable)}</span>
               </div>
             </div>
             <div className="dist-item">
@@ -2032,6 +2058,10 @@ export default function App() {
                 <span className="dist-value">{currency(globalSecretInvestment.balance)}</span>
               </div>
             </div>
+          </div>
+          <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1.5px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            <span style={{fontSize: '0.85rem', fontWeight: 700, color: '#4285f4'}}>Total in Bank</span>
+            <span style={{fontSize: '0.95rem', fontWeight: 700, color: '#4285f4'}}>{currency(totalPhysicalBank)}</span>
           </div>
         </div>
 
@@ -2069,7 +2099,7 @@ export default function App() {
                     },
                   ],
                   onSubmit: (v) =>
-                    addBankSpending(v.amount, v.date, v.description),
+                    addBankSpending(parseFloat(v.amount), v.date, v.description),
                 })
               }
             >
@@ -2145,6 +2175,51 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (() => {
+          const monthlyRev = recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0);
+          const monthlyExp = recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0);
+          const yearlyRev = recurringRevenue.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0);
+          const yearlyExp = recurringExpenses.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0);
+          const netMonthly = monthlyRev - monthlyExp;
+          return (
+            <div className="card">
+              <h2 className="section-title">Recurring Impact</h2>
+              <p className="section-sub">Projected monthly cash flow from recurring items</p>
+              <div className="stats-grid cols-3" style={{marginTop: '16px'}}>
+                <div className="stat-card highlight-card bg-income-soft">
+                  <div className="stat-content">
+                    <div className="stat-label">Monthly Revenue</div>
+                    <div className="stat-value text-income">{currency(monthlyRev)}</div>
+                    <div className="stat-sub">{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length} active item{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length !== 1 ? 's' : ''}</div>
+                  </div>
+                </div>
+                <div className="stat-card highlight-card bg-expense-soft">
+                  <div className="stat-content">
+                    <div className="stat-label">Monthly Expenses</div>
+                    <div className="stat-value text-expense">{currency(monthlyExp)}</div>
+                    <div className="stat-sub">{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length} active item{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length !== 1 ? 's' : ''}</div>
+                  </div>
+                </div>
+                <div className="stat-card highlight-card bg-bank-soft">
+                  <div className="stat-content">
+                    <div className="stat-label">Net Monthly</div>
+                    <div className="stat-value" style={{color: netMonthly >= 0 ? 'var(--income)' : 'var(--expense)'}}>{currency(netMonthly)}</div>
+                    <div className="stat-sub">Projected impact</div>
+                  </div>
+                </div>
+              </div>
+              {(yearlyRev > 0 || yearlyExp > 0) && (
+                <div style={{marginTop: '12px', padding: '10px 14px', background: 'rgba(0,0,0,0.02)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)'}}>
+                  Yearly: {currency(yearlyRev)} revenue / {currency(yearlyExp)} expenses (net {currency(yearlyRev - yearlyExp)}/yr)
+                </div>
+              )}
+              <div style={{marginTop: '12px', padding: '10px 14px', background: 'rgba(66, 133, 244, 0.05)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5'}}>
+                Recurring items are projections — actual amounts are tracked through project payments and expenses
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -2170,7 +2245,7 @@ export default function App() {
                   { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", placeholder: "0.00", required: true },
                   { name: "description", label: "Description", placeholder: "Budget description" },
                 ],
-                onSubmit: (v) => addBudget(v.name, v.allocatedAmount, v.description),
+                onSubmit: (v) => addBudget(v.name, parseFloat(v.allocatedAmount), v.description),
               })
             }
           >
@@ -2227,7 +2302,7 @@ export default function App() {
                           { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", default: String(b.allocatedAmount), required: true },
                           { name: "description", label: "Description", default: b.description || "", placeholder: "Budget description" },
                         ],
-                        onSubmit: (v) => editBudget(b.id, v.name, v.allocatedAmount, v.description),
+                        onSubmit: (v) => editBudget(b.id, v.name, parseFloat(v.allocatedAmount), v.description),
                       })}>{Icons.edit}</button>
                       <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteBudget(b.id, b.name)}>{Icons.trash}</button>
                     </div>
@@ -2265,7 +2340,7 @@ export default function App() {
                       { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                       { name: "description", label: "Description", placeholder: "What was this for?", required: true },
                     ],
-                    onSubmit: (v) => addBudgetSpending(b.id, v.amount, v.date, v.description),
+                    onSubmit: (v) => addBudgetSpending(b.id, parseFloat(v.amount), v.date, v.description),
                   })}>
                     {Icons.plus} <span>Add Spending</span>
                   </button>
@@ -2326,7 +2401,7 @@ export default function App() {
                     { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
                     { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                   ],
-                  onSubmit: (v) => addRecurringRevenue(v.projectId || null, v.amount, v.frequency, v.description, v.startDate),
+                  onSubmit: (v) => addRecurringRevenue(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate),
                 })
               }
             >
@@ -2399,7 +2474,7 @@ export default function App() {
                     { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
                     { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                   ],
-                  onSubmit: (v) => addRecurringExpense(v.projectId || null, v.amount, v.frequency, v.description, v.startDate),
+                  onSubmit: (v) => addRecurringExpense(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate),
                 })
               }
             >
@@ -2536,7 +2611,7 @@ export default function App() {
                     },
                   ],
                   onSubmit: (v) =>
-                    addSecretInvestmentSpending(v.amount, v.date, v.description),
+                    addSecretInvestmentSpending(parseFloat(v.amount), v.date, v.description),
                 })
               }
             >

@@ -11,11 +11,12 @@ Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects
 - **Hosting**: Netlify (`ralfinance.netlify.app`)
 - **Currency**: BHD (Bahraini Dinar, 3 decimal places)
 - **Migrations**: Supabase CLI + GitHub Actions auto-deploy
+- **MCP Tools**: Playwright (browser automation/testing), shadcn (UI components)
 
 ## File Structure
 ```
 src/
-├── App.jsx ........................ Main app — all views, CRUD, modals, sidebar, dashboard (~3000 lines)
+├── App.jsx ........................ Main app — all views, CRUD, modals, sidebar, dashboard (~3000+ lines)
 ├── main.jsx ....................... Entry point — routing, ProtectedRoute, AuthProvider
 ├── style.css ...................... Full design system — custom CSS, responsive
 ├── services/
@@ -24,7 +25,7 @@ src/
 │   └── AuthContext.jsx ............ Auth context — Google OAuth, email validation, force sign-out
 └── pages/
     ├── LoginPage.jsx .............. Login page with Google sign-in
-    └── AuthCallbackPage.jsx ....... OAuth callback handler (15s timeout fallback)
+    └── AuthCallbackPage.jsx ....... OAuth callback handler (explicit session exchange, 15s timeout fallback)
 
 supabase/
 ├── config.toml .................... Supabase CLI config
@@ -41,7 +42,7 @@ netlify/
 
 .github/
 └── workflows/
-    └── migrate.yml ................ Auto-deploys migrations when supabase/migrations/ changes
+    └── migrate.yml ................ Auto-deploys migrations on push to main (+ manual workflow_dispatch)
 ```
 
 ## Database Schema
@@ -64,26 +65,49 @@ All tables have:
 ## Database Migrations (IMPORTANT)
 - **All DB changes go through migration files** in `supabase/migrations/`
 - Migration files use timestamp format: `YYYYMMDDHHMMSS_description.sql`
-- On push to `main`, GitHub Action auto-deploys new migrations via `supabase db push`
+- On push to `main`, GitHub Action auto-deploys new migrations via `supabase db push --include-all --yes`
 - GitHub secrets required: `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`
 - When making DB changes: create a new migration file, update frontend code to match
-- Use `IF NOT EXISTS` / `IF EXISTS` for safety in migrations
+- **PostgreSQL does NOT support `CREATE POLICY IF NOT EXISTS`** — use `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;` blocks instead
+- Use `IF NOT EXISTS` / `IF EXISTS` for tables and indexes (but NOT for policies)
 
 ## Business Logic
-- **Profit** = Total Paid - Total Expenses (per project)
+
+### Profit Calculation
+- **totalPaid** = sum of actual payments (used for "Paid" column display)
+- **totalRevenue** = totalPaid + active project-linked recurring revenue (used for profit calculations)
+- **Profit** = totalRevenue - totalExpenses (per project, where totalExpenses includes project-linked recurring expenses)
 - **Profit Split**: If profit > 0, 25% each to: Bank Savings, Suhaib, Mohammed, Secret Investment
-- **Bank & Secret Investment** have independent spending tracking
+
+### Recurring Items Integration
+- **Project-linked recurring**: Active recurring items with a `project_id` add to that project's revenue/expenses and flow through the normal profit split
+- **General recurring** (no project): Creates its own profit split via `generalRecurringShare`
+- `generalRecurringRev` = sum of active recurring revenue without project_id
+- `generalRecurringExp` = sum of active recurring expenses without project_id
+- `generalRecurringProfit` = generalRecurringRev - generalRecurringExp
+- `generalRecurringShare` = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0
+- Global totals include both project-linked and general recurring
+
+### Bank & Budget Logic
+- **totalPhysicalBank** = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - secretInvestmentSpent - bankSpent - budgetSpent
+- **bankSpendable** = bank's 25% share income - bank spending - budget spending (budgets come from the bank share)
+- **Bank & Secret Investment** income includes `generalRecurringShare`
 - **Partner Withdrawals**: Suhaib and Mohammed can withdraw from their 25% share
 - **Available Balance** = accumulated share - withdrawn/spent
-- **totalPhysicalBank** = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - secretInvestmentSpent - bankSpent - budgetSpent
-- **Budgets**: Independent categories with allocated amounts and tracked spending (spending deducted from totalPhysicalBank)
-- **Recurring Items**: Revenue and expense templates with monthly/yearly frequency, active/paused toggle, optional project association
+
+### Key Computed Values (all via useMemo)
+- `projectStats` — per-project stats including recurring items, profit, and 4-way split
+- `globalBank` — bank share income (includes generalRecurringShare), spent, balance
+- `globalSecretInvestment` — secret investment share income (includes generalRecurringShare), spent, balance
+- `bankSpendable` — bank share minus bank spending minus budget spending
+- `totalPhysicalBank` — actual money in the bank after all deductions
+- `budgetStats` — per-budget allocated vs spent
 
 ## App Views
 1. **Dashboard** — Summary cards (revenue, expenses, profit, bank total), profit distribution, partner balances with withdrawals, budget & recurring quick overview, projects table
 2. **Projects** — List of all projects with value, paid, unpaid, expenses, profit, status
 3. **Project Detail** — Individual project: payments table, expenses table, profit split per project
-4. **Bank Savings** — Total in bank, bank share, bank spent, bank available, money allocation breakdown, spending history, project contributions
+4. **Bank Savings** — Total in bank, bank share, bank spent, bank available (bankSpendable), money allocation breakdown, spending history, project contributions, recurring impact card
 5. **Budgets** — Budget cards with progress bars, spending tracking per budget, CRUD for budgets and spending
 6. **Recurring** — Recurring revenue and expenses tables with active/pause toggle, frequency, project association
 7. **Reports** — Monthly P&L, Partner Summary, Budget Utilization, Recurring Obligations, Cash Flow Summary, Project Performance
@@ -92,12 +116,26 @@ All tables have:
 ## Key Patterns
 - Single-file App.jsx with nested function components
 - All state via `useState` — no external state library
-- Computed values via `useMemo` (projectStats, globalBank, globalSecretInvestment, budgetStats, totalPhysicalBank)
+- Computed values via `useMemo` (projectStats, globalBank, globalSecretInvestment, budgetStats, bankSpendable, totalPhysicalBank)
 - Every CRUD op: async call to Supabase → refresh all data → show toast (success + error)
+- All numeric form values use `parseFloat()` before sending to DB (form inputs return strings)
+- ModalForm `handleSubmit` does NOT call `onClose()` — modal stays open on error, CRUD success calls `setModal(null)`
 - Confirmation dialogs for all delete operations
 - ModalForm supports text, number, date, and select field types
-- Mobile-responsive with hamburger menu sidebar
-- Auth: `clearSupabaseStorage()` purges all sb-* keys; `forceFullSignOut()` handles denied access; `isForceSigningOut` ref prevents race conditions
+- Red border validation on required fields (`input:required:invalid:not(:focus):not(:placeholder-shown)`)
+- Mobile-responsive with hamburger menu sidebar (conditional rendering, no CSS display toggle)
+- Auth: `clearSupabaseStorage()` purges all sb-* keys; `forceFullSignOut()` with `scope: "global"` handles denied access; `isForceSigningOut` ref prevents race conditions; `prompt: "select_account"` forces Google account picker on every sign-in
+
+## Local Development
+- Run `bun dev` to start the local dev server at `http://localhost:5175` (port forced via `strictPort: true` in vite.config.js)
+- OAuth redirect uses `window.location.origin` automatically — resolves to `localhost:5175` locally and `ralfinance.netlify.app` in prod
+- **Supabase dashboard requirement**: `http://localhost:5175/auth/callback` must be listed in Authentication → URL Configuration → Redirect URLs
+- `.env.development` contains Supabase credentials (gitignored) — same Supabase project for local and production
+- AuthCallbackPage explicitly exchanges session on mount (checks URL hash/code params)
+
+## MCP Tools Setup
+- **Playwright MCP**: Browser automation and testing — installed globally via `@anthropic-ai/claude-code` with `@anthropic-ai/mcp-server-playwright` package
+- **shadcn MCP**: UI component library — connected by user for component access
 
 ## Working Rules
 - **Always update this CLAUDE.md** when making architectural changes, adding features, or changing patterns
