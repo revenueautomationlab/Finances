@@ -69,39 +69,55 @@ ALTER TABLE bank_spending ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charity_spending ENABLE ROW LEVEL SECURITY;
 
 -- Allow authenticated users full access
-CREATE POLICY IF NOT EXISTS "Authenticated users can read projects"
-  ON projects FOR SELECT TO authenticated USING (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can insert projects"
-  ON projects FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can update projects"
-  ON projects FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can delete projects"
-  ON projects FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can read projects" ON projects FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can insert projects" ON projects FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can update projects" ON projects FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can delete projects" ON projects FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE POLICY IF NOT EXISTS "Authenticated users can read payments"
-  ON payments FOR SELECT TO authenticated USING (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can insert payments"
-  ON payments FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can delete payments"
-  ON payments FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can read payments" ON payments FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can insert payments" ON payments FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can delete payments" ON payments FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE POLICY IF NOT EXISTS "Authenticated users can read expenses"
-  ON expenses FOR SELECT TO authenticated USING (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can insert expenses"
-  ON expenses FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can delete expenses"
-  ON expenses FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can read expenses" ON expenses FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can insert expenses" ON expenses FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can delete expenses" ON expenses FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE POLICY IF NOT EXISTS "Authenticated users can read bank_spending"
-  ON bank_spending FOR SELECT TO authenticated USING (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can insert bank_spending"
-  ON bank_spending FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can delete bank_spending"
-  ON bank_spending FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can read bank_spending" ON bank_spending FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can insert bank_spending" ON bank_spending FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can delete bank_spending" ON bank_spending FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE POLICY IF NOT EXISTS "Authenticated users can read charity_spending"
-  ON charity_spending FOR SELECT TO authenticated USING (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can insert charity_spending"
-  ON charity_spending FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "Authenticated users can delete charity_spending"
-  ON charity_spending FOR DELETE TO authenticated USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can read charity_spending" ON charity_spending FOR SELECT TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can insert charity_spending" ON charity_spending FOR INSERT TO authenticated WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE POLICY "Authenticated users can delete charity_spending" ON charity_spending FOR DELETE TO authenticated USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
