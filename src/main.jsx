@@ -2,10 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { Toaster } from "@/components/ui/sonner";
 import App from "./App";
 import LoginPage from "./pages/LoginPage";
 import AuthCallbackPage from "./pages/AuthCallbackPage";
-import "./style.css";
+import "./index.css";
+import { Loader2 } from "lucide-react";
 
 // Protected route wrapper
 function ProtectedRoute({ children }) {
@@ -13,30 +15,11 @@ function ProtectedRoute({ children }) {
 
   if (loading) {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          minHeight: "100vh",
-          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        }}
-      >
-        <div
-          style={{
-            width: "50px",
-            height: "50px",
-            border: "3px solid rgba(255,255,255,0.3)",
-            borderTop: "3px solid white",
-            borderRadius: "50%",
-            animation: "spin 1s linear infinite",
-          }}
-        ></div>
-        <style>{`
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </div>
       </div>
     );
   }
@@ -50,18 +33,21 @@ function ProtectedRoute({ children }) {
 
 function AppRoot() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/auth/callback" element={<AuthCallbackPage />} />
-      <Route
-        path="/*"
-        element={
-          <ProtectedRoute>
-            <App />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <App />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+      <Toaster position="top-right" richColors closeButton />
+    </>
   );
 }
 

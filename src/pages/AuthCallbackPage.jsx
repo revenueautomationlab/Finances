@@ -2,23 +2,20 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../services/supabaseService";
+import { Loader2 } from "lucide-react";
 
 export default function AuthCallbackPage() {
   const navigate = useNavigate();
   const { user, loading, error } = useAuth();
 
   // On mount, explicitly exchange the URL hash/code for a session
-  // This ensures the auth tokens from the redirect are properly processed
   useEffect(() => {
     const handleCallback = async () => {
       try {
-        // Check if there are auth params in the URL (hash or query)
         const hashParams = new URLSearchParams(window.location.hash.substring(1));
         const queryParams = new URLSearchParams(window.location.search);
 
         if (hashParams.get("access_token") || queryParams.get("code")) {
-          // Let Supabase process the callback — it auto-detects hash/code
-          // getSession() triggers the exchange if needed
           await supabase.auth.getSession();
         }
       } catch (err) {
@@ -31,10 +28,8 @@ export default function AuthCallbackPage() {
   useEffect(() => {
     if (!loading) {
       if (error) {
-        // If there's an error, redirect to login to show the error message
         navigate("/login", { replace: true });
       } else if (user) {
-        // If user is authenticated, go to home
         navigate("/", { replace: true });
       }
     }
@@ -51,45 +46,14 @@ export default function AuthCallbackPage() {
   }, [loading, navigate]);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      }}
-    >
-      <div
-        style={{
-          textAlign: "center",
-          color: "white",
-        }}
-      >
-        <div
-          style={{
-            width: "50px",
-            height: "50px",
-            border: "3px solid rgba(255,255,255,0.3)",
-            borderTop: "3px solid white",
-            borderRadius: "50%",
-            animation: "spin 1s linear infinite",
-            margin: "0 auto 20px",
-          }}
-        ></div>
-        <h2 style={{ fontSize: "20px", margin: 0 }}>Signing you in...</h2>
-        <p style={{ fontSize: "14px", opacity: 0.8, marginTop: "10px" }}>
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary/80 to-primary/40">
+      <div className="text-center text-primary-foreground">
+        <Loader2 className="h-12 w-12 animate-spin mx-auto mb-5 text-white" />
+        <h2 className="text-xl font-semibold text-white">Signing you in...</h2>
+        <p className="text-sm text-white/80 mt-2">
           Please wait while we complete your sign in.
         </p>
       </div>
-
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 }

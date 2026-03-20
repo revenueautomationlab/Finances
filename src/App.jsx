@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "./contexts/AuthContext";
+import { toast } from "sonner";
 import {
   fetchState as fetchStateFromDB,
   addProject as dbAddProject,
@@ -28,258 +29,109 @@ import {
   deleteRecurringExpense as dbDeleteRecurringExpense,
 } from "./services/supabaseService";
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  LayoutDashboard, FolderKanban, Landmark, PiggyBank, Repeat, FileBarChart,
+  TrendingUp, TrendingDown, DollarSign, Plus, Trash2, Pencil, Eye, ArrowLeft,
+  Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
+  ArrowDownRight, Target, Loader2, AlertTriangle,
+} from "lucide-react";
 
+// --- Helpers ---
 const currency = (n) => {
   const num = Number(n) || 0;
-  return (
-    "BHD " +
-    num.toLocaleString("en-US", {
-      minimumFractionDigits: 3,
-      maximumFractionDigits: 3,
-    })
-  );
+  return "BHD " + num.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 };
 
 const formatDate = (d) => {
   if (!d) return "-";
   const date = new Date(d + "T00:00:00");
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
-const initialState = { projects: [], bankSpending: [], secretInvestmentSpending: [], partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [] };
-
-// --- SVG Icons ---
-const Icons = {
-  dashboard: (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="3" width="7" height="7" rx="1" />
-      <rect x="3" y="14" width="7" height="7" rx="1" />
-      <rect x="14" y="14" width="7" height="7" rx="1" />
-    </svg>
-  ),
-  projects: (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-    </svg>
-  ),
-  bank: (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
-    </svg>
-  ),
-  charity: (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
-    </svg>
-  ),
-  plus: (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-    >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  ),
-  trash: (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-    </svg>
-  ),
-  edit: (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </svg>
-  ),
-  back: (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12 19 5 12 12 5" />
-    </svg>
-  ),
-  eye: (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  ),
-  close: (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-    >
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  ),
-  revenue: (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
-    </svg>
-  ),
-  expense: (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-      <polyline points="17 6 23 6 23 12" />
-    </svg>
-  ),
-  profit: (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
-      <polyline points="16 7 22 7 22 13" />
-    </svg>
-  ),
-  partner: (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
-      <circle cx="12" cy="7" r="4" />
-    </svg>
-  ),
-  empty: (
-    <svg
-      width="64"
-      height="64"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-      <line x1="8" y1="21" x2="16" y2="21" />
-      <line x1="12" y1="17" x2="12" y2="21" />
-    </svg>
-  ),
+const initialState = {
+  projects: [], bankSpending: [], secretInvestmentSpending: [],
+  partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [],
 };
+
+// --- Stat Card Component ---
+function StatCard({ icon: Icon, label, value, sub, variant = "default", className, onClick }) {
+  const variants = {
+    default: "bg-card",
+    income: "bg-emerald-50 border-emerald-200/60",
+    expense: "bg-red-50 border-red-200/60",
+    bank: "bg-indigo-50 border-indigo-200/60",
+    partner1: "bg-amber-50 border-amber-200/60",
+    partner2: "bg-violet-50 border-violet-200/60",
+    secret: "bg-pink-50 border-pink-200/60",
+    highlight: "bg-gradient-to-br from-primary/5 to-primary/10 border-primary/20",
+  };
+  const iconVariants = {
+    default: "bg-primary/10 text-primary",
+    income: "bg-emerald-500/10 text-emerald-600",
+    expense: "bg-red-500/10 text-red-600",
+    bank: "bg-indigo-500/10 text-indigo-600",
+    partner1: "bg-amber-500/10 text-amber-600",
+    partner2: "bg-violet-500/10 text-violet-600",
+    secret: "bg-pink-500/10 text-pink-600",
+    highlight: "bg-primary/10 text-primary",
+  };
+  const valueVariants = {
+    default: "text-foreground",
+    income: "text-emerald-700",
+    expense: "text-red-600",
+    bank: "text-indigo-700",
+    partner1: "text-amber-700",
+    partner2: "text-violet-700",
+    secret: "text-pink-700",
+    highlight: "text-primary",
+  };
+  return (
+    <Card
+      className={cn("transition-all hover:shadow-md", variants[variant], onClick && "cursor-pointer hover:-translate-y-0.5", className)}
+      onClick={onClick}
+    >
+      <CardContent className="flex items-center gap-4 p-5">
+        {Icon && (
+          <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-xl", iconVariants[variant])}>
+            <Icon className="h-5 w-5" />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className={cn("text-xl font-bold tabular-nums tracking-tight", valueVariants[variant])}>{value}</p>
+          {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// --- Empty State ---
+function EmptyState({ icon: Icon, title, description, action }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      <div className="mb-4 rounded-2xl bg-muted/50 p-5">
+        <Icon className="h-10 w-10 text-muted-foreground/50" />
+      </div>
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-1 text-sm text-muted-foreground max-w-sm">{description}</p>
+      {action && <div className="mt-5">{action}</div>}
+    </div>
+  );
+}
 
 export default function App() {
   const { user, signOut } = useAuth();
@@ -288,105 +140,62 @@ export default function App() {
   const [view, setView] = useState("dashboard");
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [modal, setModal] = useState(null);
-  const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [loading, setLoading] = useState(false);
   const [reportMonth, setReportMonth] = useState(() => {
     const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
 
-  // Load data from Supabase on mount
   useEffect(() => {
     const loadData = async () => {
       try {
         const data = await fetchStateFromDB();
         setState(data);
-        setLoaded(true);
       } catch (error) {
         console.error("Failed to load data:", error);
-        setLoaded(true); // Still load even if error
+        toast.error("Failed to load data");
+      } finally {
+        setLoaded(true);
       }
     };
     loadData();
   }, []);
 
-  const showToast = (msg, type = "success", duration = 3000) => {
-    setToast({ msg, type, id: Date.now() });
-    setTimeout(() => setToast(null), duration);
-  };
-
-  const showConfirm = (
-    title,
-    message,
-    action,
-    onConfirm,
-    isDangerous = false,
-  ) => {
-    setConfirm({
-      title,
-      message,
-      action,
-      onConfirm,
-      isDangerous,
-    });
-  };
-
-  const refreshData = async () => {
+  const refreshData = useCallback(async () => {
     try {
       const data = await fetchStateFromDB();
       setState(data);
     } catch (error) {
       console.error("Failed to refresh data:", error);
     }
+  }, []);
+
+  const showConfirm = (title, message, action, onConfirm, isDangerous = false) => {
+    setConfirm({ title, message, action, onConfirm, isDangerous });
   };
 
   const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, budgets, recurringRevenue, recurringExpenses } = state;
-  const updateProjects = (fn) =>
-    setState((s) => ({ ...s, projects: fn(s.projects) }));
 
+  // --- Computed Values ---
   const projectStats = useMemo(() => {
     return projects.map((p) => {
       const totalPaid = (p.payments || []).reduce((a, x) => a + x.amount, 0);
       const unpaid = p.totalValue - totalPaid;
-      const totalExpenses = (p.expenses || []).reduce(
-        (a, x) => a + x.amount,
-        0,
-      );
-      // Add active recurring items linked to this project
-      const projRecurringRev = recurringRevenue
-        .filter(r => r.active && r.projectId === p.id)
-        .reduce((a, r) => a + r.amount, 0);
-      const projRecurringExp = recurringExpenses
-        .filter(r => r.active && r.projectId === p.id)
-        .reduce((a, r) => a + r.amount, 0);
+      const totalExpenses = (p.expenses || []).reduce((a, x) => a + x.amount, 0);
+      const projRecurringRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id).reduce((a, r) => a + r.amount, 0);
+      const projRecurringExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id).reduce((a, r) => a + r.amount, 0);
       const totalRevenue = totalPaid + projRecurringRev;
       const totalExp = totalExpenses + projRecurringExp;
       const profit = totalRevenue - totalExp;
       const share = profit > 0 ? profit * 0.25 : 0;
-      return {
-        ...p,
-        totalPaid,
-        totalRevenue,
-        unpaid,
-        totalExpenses: totalExp,
-        profit,
-        bankShare: share,
-        suhaibShare: share,
-        mohammedShare: share,
-        secretInvestmentShare: share,
-      };
+      return { ...p, totalPaid, totalRevenue, unpaid, totalExpenses: totalExp, profit, bankShare: share, suhaibShare: share, mohammedShare: share, secretInvestmentShare: share };
     });
   }, [projects, recurringRevenue, recurringExpenses]);
 
-  // General recurring items (not linked to any project) — still get profit-split
-  const generalRecurringRev = recurringRevenue
-    .filter(r => r.active && !r.projectId)
-    .reduce((a, r) => a + r.amount, 0);
-  const generalRecurringExp = recurringExpenses
-    .filter(r => r.active && !r.projectId)
-    .reduce((a, r) => a + r.amount, 0);
+  const generalRecurringRev = recurringRevenue.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
+  const generalRecurringExp = recurringExpenses.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
   const generalRecurringProfit = generalRecurringRev - generalRecurringExp;
   const generalRecurringShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0;
 
@@ -407,28 +216,22 @@ export default function App() {
   const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringShare;
   const globalRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0) + generalRecurringRev;
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0) + generalRecurringExp;
-  const suhaibWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'suhaib');
-  const mohammedWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'mohammed');
+  const suhaibWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "suhaib");
+  const mohammedWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "mohammed");
   const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
   const mohammedWithdrawn = mohammedWithdrawals.reduce((a, w) => a + w.amount, 0);
   const suhaibAvailable = globalSuhaib - suhaibWithdrawn;
   const mohammedAvailable = globalMohammed - mohammedWithdrawn;
 
-  const budgetStats = budgets.map(b => {
+  const budgetStats = budgets.map((b) => {
     const spent = (b.spending || []).reduce((a, s) => a + s.amount, 0);
     return { ...b, spent, remaining: b.allocatedAmount - spent };
   });
   const totalBudgetAllocated = budgetStats.reduce((a, b) => a + b.allocatedAmount, 0);
   const totalBudgetSpent = budgetStats.reduce((a, b) => a + b.spent, 0);
-
-  // Total money physically in the bank
   const totalPhysicalBank = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - globalSecretInvestment.spent - globalBank.spent - totalBudgetSpent;
-
-  // Spendable = bank's 25% share minus bank spending AND budget spending (budgets come from bank share)
   const bankSpendable = globalBank.income - globalBank.spent - totalBudgetSpent;
-
-  const selectedProject =
-    projectStats.find((p) => p.id === selectedProjectId) || null;
+  const selectedProject = projectStats.find((p) => p.id === selectedProjectId) || null;
 
   // --- CRUD Operations ---
   const addProject = async (name, totalValue) => {
@@ -436,11 +239,10 @@ export default function App() {
     try {
       await dbAddProject(name, totalValue);
       await refreshData();
-      showToast(`✓ Project "${name}" created successfully`, "success");
+      toast.success(`Project "${name}" created`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add project:", error);
-      showToast(`✗ Failed to create project: ${error.message}`, "error", 4000);
+      toast.error(`Failed to create project: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -451,45 +253,30 @@ export default function App() {
     try {
       await dbUpdateProject(id, name, totalValue);
       await refreshData();
-      showToast(`✓ Project "${name}" updated successfully`, "success");
+      toast.success(`Project "${name}" updated`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to update project:", error);
-      showToast(`✗ Failed to update project: ${error.message}`, "error", 4000);
+      toast.error(`Failed to update project: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteProject = (id, name) => {
-    showConfirm(
-      "Delete Project",
-      `Are you sure you want to delete "${name}"? This action cannot be undone and will remove all payments and expenses.`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteProject(id);
-          if (selectedProjectId === id) {
-            setSelectedProjectId(null);
-            setView("dashboard");
-          }
-          await refreshData();
-          showToast(`✓ Project "${name}" deleted successfully`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete project:", error);
-          showToast(
-            `✗ Failed to delete project: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Project", `Are you sure you want to delete "${name}"? All payments and expenses will be permanently removed.`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteProject(id);
+        if (selectedProjectId === id) { setSelectedProjectId(null); setView("dashboard"); }
+        await refreshData();
+        toast.success(`Project "${name}" deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete project: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addPayment = async (projectId, amount, date, note) => {
@@ -497,41 +284,29 @@ export default function App() {
     try {
       await dbAddPayment(projectId, amount, date, note);
       await refreshData();
-      showToast(`✓ Payment of ${currency(amount)} recorded`, "success");
+      toast.success(`Payment of ${currency(amount)} recorded`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add payment:", error);
-      showToast(`✗ Failed to record payment: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record payment: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deletePayment = (projectId, paymentId, amount) => {
-    showConfirm(
-      "Delete Payment",
-      `Are you sure you want to delete this payment of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeletePayment(projectId, paymentId);
-          await refreshData();
-          showToast(`✓ Payment of ${currency(amount)} deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete payment:", error);
-          showToast(
-            `✗ Failed to delete payment: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Payment", `Delete this payment of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeletePayment(projectId, paymentId);
+        await refreshData();
+        toast.success(`Payment deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete payment: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addExpense = async (projectId, amount, date, description) => {
@@ -539,41 +314,29 @@ export default function App() {
     try {
       await dbAddExpense(projectId, amount, date, description);
       await refreshData();
-      showToast(`✓ Expense of ${currency(amount)} recorded`, "success");
+      toast.success(`Expense of ${currency(amount)} recorded`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add expense:", error);
-      showToast(`✗ Failed to record expense: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record expense: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteExpense = (projectId, expenseId, amount) => {
-    showConfirm(
-      "Delete Expense",
-      `Are you sure you want to delete this expense of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteExpense(projectId, expenseId);
-          await refreshData();
-          showToast(`✓ Expense of ${currency(amount)} deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete expense:", error);
-          showToast(
-            `✗ Failed to delete expense: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Expense", `Delete this expense of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteExpense(projectId, expenseId);
+        await refreshData();
+        toast.success(`Expense deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete expense: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addBankSpending = async (amount, date, description) => {
@@ -581,44 +344,29 @@ export default function App() {
     try {
       await dbAddBankSpending(amount, date, description);
       await refreshData();
-      showToast(`✓ Bank spending of ${currency(amount)} recorded`, "success");
+      toast.success(`Bank spending of ${currency(amount)} recorded`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add bank spending:", error);
-      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record spending: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteBankSpending = (id, amount) => {
-    showConfirm(
-      "Delete Bank Spending",
-      `Are you sure you want to delete this bank spending of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteBankSpending(id);
-          await refreshData();
-          showToast(
-            `✓ Bank spending of ${currency(amount)} deleted`,
-            "success",
-          );
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete bank spending:", error);
-          showToast(
-            `✗ Failed to delete spending: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Bank Spending", `Delete this spending of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteBankSpending(id);
+        await refreshData();
+        toast.success(`Spending deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete spending: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addSecretInvestmentSpending = async (amount, date, description) => {
@@ -626,47 +374,29 @@ export default function App() {
     try {
       await dbAddSecretInvestmentSpending(amount, date, description);
       await refreshData();
-      showToast(
-        `✓ Secret Investment spending of ${currency(amount)} recorded`,
-        "success",
-      );
+      toast.success(`Secret Investment spending of ${currency(amount)} recorded`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add secret investment spending:", error);
-      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record spending: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteSecretInvestmentSpending = (id, amount) => {
-    showConfirm(
-      "Delete Secret Investment Spending",
-      `Are you sure you want to delete this secret investment spending of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteSecretInvestmentSpending(id);
-          await refreshData();
-          showToast(
-            `✓ Secret Investment spending of ${currency(amount)} deleted`,
-            "success",
-          );
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete secret investment spending:", error);
-          showToast(
-            `✗ Failed to delete spending: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Spending", `Delete this spending of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteSecretInvestmentSpending(id);
+        await refreshData();
+        toast.success(`Spending deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete spending: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addPartnerWithdrawal = async (partnerName, amount, date, note) => {
@@ -674,41 +404,29 @@ export default function App() {
     try {
       await dbAddPartnerWithdrawal(partnerName, amount, date, note);
       await refreshData();
-      showToast(`✓ Withdrawal of ${currency(amount)} recorded for ${partnerName === 'suhaib' ? 'Suhaib' : 'Mohammed'}`, "success");
+      toast.success(`Withdrawal of ${currency(amount)} recorded for ${partnerName === "suhaib" ? "Suhaib" : "Mohammed"}`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add partner withdrawal:", error);
-      showToast(`✗ Failed to record withdrawal: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record withdrawal: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deletePartnerWithdrawal = (id, amount) => {
-    showConfirm(
-      "Delete Withdrawal",
-      `Are you sure you want to delete this withdrawal of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeletePartnerWithdrawal(id);
-          await refreshData();
-          showToast(`✓ Withdrawal of ${currency(amount)} deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete partner withdrawal:", error);
-          showToast(
-            `✗ Failed to delete withdrawal: ${error.message}`,
-            "error",
-            4000,
-          );
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Withdrawal", `Delete this withdrawal of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeletePartnerWithdrawal(id);
+        await refreshData();
+        toast.success(`Withdrawal deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete withdrawal: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addBudget = async (name, allocatedAmount, description) => {
@@ -716,11 +434,10 @@ export default function App() {
     try {
       await dbAddBudget(name, allocatedAmount, description);
       await refreshData();
-      showToast(`✓ Budget "${name}" created successfully`, "success");
+      toast.success(`Budget "${name}" created`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add budget:", error);
-      showToast(`✗ Failed to create budget: ${error.message}`, "error", 4000);
+      toast.error(`Failed to create budget: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -731,37 +448,29 @@ export default function App() {
     try {
       await dbUpdateBudget(id, name, allocatedAmount, description);
       await refreshData();
-      showToast(`✓ Budget "${name}" updated successfully`, "success");
+      toast.success(`Budget "${name}" updated`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to update budget:", error);
-      showToast(`✗ Failed to update budget: ${error.message}`, "error", 4000);
+      toast.error(`Failed to update budget: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteBudget = (id, name) => {
-    showConfirm(
-      "Delete Budget",
-      `Are you sure you want to delete "${name}"? This action cannot be undone and will remove all spending records.`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteBudget(id);
-          await refreshData();
-          showToast(`✓ Budget "${name}" deleted successfully`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete budget:", error);
-          showToast(`✗ Failed to delete budget: ${error.message}`, "error", 4000);
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Budget", `Delete "${name}"? All spending records will be removed.`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteBudget(id);
+        await refreshData();
+        toast.success(`Budget "${name}" deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete budget: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const addBudgetSpending = async (budgetId, amount, date, description) => {
@@ -769,76 +478,59 @@ export default function App() {
     try {
       await dbAddBudgetSpending(budgetId, amount, date, description);
       await refreshData();
-      showToast(`✓ Spending of ${currency(amount)} recorded`, "success");
+      toast.success(`Spending of ${currency(amount)} recorded`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add budget spending:", error);
-      showToast(`✗ Failed to record spending: ${error.message}`, "error", 4000);
+      toast.error(`Failed to record spending: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteBudgetSpending = (id, amount) => {
-    showConfirm(
-      "Delete Budget Spending",
-      `Are you sure you want to delete this spending of ${currency(amount)}?`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteBudgetSpending(id);
-          await refreshData();
-          showToast(`✓ Spending of ${currency(amount)} deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete budget spending:", error);
-          showToast(`✗ Failed to delete spending: ${error.message}`, "error", 4000);
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Spending", `Delete this spending of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteBudgetSpending(id);
+        await refreshData();
+        toast.success(`Spending deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete spending: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
-  // --- Recurring Revenue ---
   const addRecurringRevenue = async (projectId, amount, frequency, description, startDate) => {
     setLoading(true);
     try {
       await dbAddRecurringRevenue(projectId, amount, frequency, description, startDate);
       await refreshData();
-      showToast(`✓ Recurring revenue "${description}" added`, "success");
+      toast.success(`Recurring revenue "${description}" added`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add recurring revenue:", error);
-      showToast(`✗ Failed to add recurring revenue: ${error.message}`, "error", 4000);
+      toast.error(`Failed to add recurring revenue: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteRecurringRevenue = (id, description) => {
-    showConfirm(
-      "Delete Recurring Revenue",
-      `Are you sure you want to delete "${description}"? This action cannot be undone.`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteRecurringRevenue(id);
-          await refreshData();
-          showToast(`✓ Recurring revenue "${description}" deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete recurring revenue:", error);
-          showToast(`✗ Failed to delete recurring revenue: ${error.message}`, "error", 4000);
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Recurring Revenue", `Delete "${description}"?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteRecurringRevenue(id);
+        await refreshData();
+        toast.success(`Recurring revenue deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const toggleRecurringRevenue = async (id, currentActive) => {
@@ -847,52 +539,42 @@ export default function App() {
       const item = recurringRevenue.find((r) => r.id === id);
       await dbUpdateRecurringRevenue(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
       await refreshData();
-      showToast(`✓ Recurring revenue ${!currentActive ? "activated" : "paused"}`, "success");
+      toast.success(`Recurring revenue ${!currentActive ? "activated" : "paused"}`);
     } catch (error) {
-      console.error("Failed to toggle recurring revenue:", error);
-      showToast(`✗ Failed to update status: ${error.message}`, "error", 4000);
+      toast.error(`Failed to update: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- Recurring Expenses ---
   const addRecurringExpense = async (projectId, amount, frequency, description, startDate) => {
     setLoading(true);
     try {
       await dbAddRecurringExpense(projectId, amount, frequency, description, startDate);
       await refreshData();
-      showToast(`✓ Recurring expense "${description}" added`, "success");
+      toast.success(`Recurring expense "${description}" added`);
       setModal(null);
     } catch (error) {
-      console.error("Failed to add recurring expense:", error);
-      showToast(`✗ Failed to add recurring expense: ${error.message}`, "error", 4000);
+      toast.error(`Failed to add recurring expense: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const deleteRecurringExpense = (id, description) => {
-    showConfirm(
-      "Delete Recurring Expense",
-      `Are you sure you want to delete "${description}"? This action cannot be undone.`,
-      "Delete",
-      async () => {
-        setLoading(true);
-        try {
-          await dbDeleteRecurringExpense(id);
-          await refreshData();
-          showToast(`✓ Recurring expense "${description}" deleted`, "success");
-          setConfirm(null);
-        } catch (error) {
-          console.error("Failed to delete recurring expense:", error);
-          showToast(`✗ Failed to delete recurring expense: ${error.message}`, "error", 4000);
-        } finally {
-          setLoading(false);
-        }
-      },
-      true,
-    );
+    showConfirm("Delete Recurring Expense", `Delete "${description}"?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteRecurringExpense(id);
+        await refreshData();
+        toast.success(`Recurring expense deleted`);
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const toggleRecurringExpense = async (id, currentActive) => {
@@ -901,605 +583,407 @@ export default function App() {
       const item = recurringExpenses.find((r) => r.id === id);
       await dbUpdateRecurringExpense(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
       await refreshData();
-      showToast(`✓ Recurring expense ${!currentActive ? "activated" : "paused"}`, "success");
+      toast.success(`Recurring expense ${!currentActive ? "activated" : "paused"}`);
     } catch (error) {
-      console.error("Failed to toggle recurring expense:", error);
-      showToast(`✗ Failed to update status: ${error.message}`, "error", 4000);
+      toast.error(`Failed to update: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const openProject = (id) => {
-    setSelectedProjectId(id);
-    setView("project");
-  };
+  const openProject = (id) => { setSelectedProjectId(id); setView("project"); };
 
-  // --- Modal Form ---
+  // --- Modal Form with Validation ---
   function ModalForm({ title, fields, onSubmit, onClose }) {
     const [values, setValues] = useState(() => {
       const v = {};
-      fields.forEach((f) => {
-        v[f.name] = f.default || "";
-      });
+      fields.forEach((f) => { v[f.name] = f.default || ""; });
       return v;
     });
-    const set = (name, val) => setValues((v) => ({ ...v, [name]: val }));
+    const [errors, setErrors] = useState({});
+    const [touched, setTouched] = useState({});
+
+    const set = (name, val) => {
+      setValues((v) => ({ ...v, [name]: val }));
+      if (errors[name]) setErrors((e) => ({ ...e, [name]: null }));
+    };
+
+    const validate = () => {
+      const errs = {};
+      fields.forEach((f) => {
+        if (f.required && !values[f.name]) {
+          errs[f.name] = `${f.label} is required`;
+        }
+        if (f.type === "number" && values[f.name]) {
+          const num = parseFloat(values[f.name]);
+          if (isNaN(num) || num <= 0) errs[f.name] = "Must be a positive number";
+        }
+      });
+      return errs;
+    };
+
     const handleSubmit = (e) => {
       e.preventDefault();
+      const errs = validate();
+      if (Object.keys(errs).length > 0) {
+        setErrors(errs);
+        setTouched(Object.fromEntries(fields.map((f) => [f.name, true])));
+        return;
+      }
       onSubmit(values);
     };
+
+    const handleBlur = (name) => {
+      setTouched((t) => ({ ...t, [name]: true }));
+      const errs = validate();
+      if (errs[name]) setErrors((e) => ({ ...e, [name]: errs[name] }));
+    };
+
+    const submitLabel = title.startsWith("Edit") ? "Update" : title.startsWith("Spend") || title.startsWith("Add Spending") ? "Record" : title.startsWith("Withdraw") ? "Withdraw" : "Add";
+
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-header">
-            <h3>{title}</h3>
-            <button className="btn-icon" onClick={onClose}>
-              {Icons.close}
-            </button>
-          </div>
-          <form onSubmit={handleSubmit}>
+      <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>Fill in the details below. All required fields are marked.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
             {fields.map((f) => (
-              <div key={f.name} className="form-group">
-                <label>{f.label}</label>
+              <div key={f.name} className="space-y-2">
+                <Label htmlFor={f.name} className="flex items-center gap-1">
+                  {f.label}
+                  {f.required && <span className="text-red-500">*</span>}
+                </Label>
                 {f.type === "select" ? (
-                  <select
-                    value={values[f.name]}
-                    onChange={(e) => set(f.name, e.target.value)}
-                    required={f.required}
-                    style={{
-                      width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)', fontSize: '0.9rem', fontFamily: 'inherit',
-                      background: 'var(--bg)', color: 'var(--text)', outline: 'none'
-                    }}
-                  >
-                    {f.placeholder && <option value="">{f.placeholder}</option>}
-                    {(f.options || []).map(opt => {
-                      if (typeof opt === 'object') {
-                        return <option key={opt.id} value={opt.id}>{opt.name}</option>;
-                      }
-                      return <option key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</option>;
-                    })}
-                  </select>
+                  <Select value={values[f.name]} onValueChange={(val) => set(f.name, val)}>
+                    <SelectTrigger className={cn(errors[f.name] && touched[f.name] && "border-red-500 ring-red-500/20 ring-2")}>
+                      <SelectValue placeholder={f.placeholder || "Select..."} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {f.placeholder && <SelectItem value="__none__">{f.placeholder}</SelectItem>}
+                      {(f.options || []).map((opt) => {
+                        if (typeof opt === "object") return <SelectItem key={opt.id} value={opt.id}>{opt.name}</SelectItem>;
+                        return <SelectItem key={opt} value={opt}>{opt.charAt(0).toUpperCase() + opt.slice(1)}</SelectItem>;
+                      })}
+                    </SelectContent>
+                  </Select>
                 ) : (
-                  <input
+                  <Input
+                    id={f.name}
                     type={f.type || "text"}
                     value={values[f.name]}
                     onChange={(e) => set(f.name, e.target.value)}
+                    onBlur={() => handleBlur(f.name)}
                     placeholder={f.placeholder}
-                    required={f.required}
-                    step={f.type === "number" ? "0.01" : undefined}
+                    step={f.type === "number" ? "0.001" : undefined}
+                    className={cn(errors[f.name] && touched[f.name] && "border-red-500 ring-red-500/20 ring-2")}
                   />
+                )}
+                {errors[f.name] && touched[f.name] && (
+                  <p className="text-xs text-red-500 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" /> {errors[f.name]}
+                  </p>
                 )}
               </div>
             ))}
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={onClose}
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={loading}
-              >
-                {loading
-                  ? "Processing..."
-                  : title.startsWith("Edit")
-                    ? "Update"
-                    : title.startsWith("Spend")
-                      ? "Record"
-                      : title.startsWith("Withdraw")
-                        ? "Withdraw"
-                        : "Add"}
-              </button>
-            </div>
+            <DialogFooter className="pt-4">
+              <Button type="button" variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+              <Button type="submit" disabled={loading}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {loading ? "Processing..." : submitLabel}
+              </Button>
+            </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // --- Navigation ---
+  const navItems = [
+    { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { key: "projects", label: "Projects", icon: FolderKanban, count: projects.length },
+    { key: "bank", label: "Bank Savings", icon: Landmark },
+    { key: "budgets", label: "Budgets", icon: Target, count: budgets.length },
+    { key: "recurring", label: "Recurring", icon: Repeat },
+    { key: "reports", label: "Reports", icon: FileBarChart },
+    { key: "secretInvestment", label: "Secret Investment", icon: PiggyBank },
+  ];
+
+  function SidebarContent() {
+    return (
+      <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+        <div className="flex items-center gap-3 border-b border-sidebar-border px-5 py-5">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-violet-500 text-lg font-extrabold text-white">
+            R
+          </div>
+          <div>
+            <h2 className="text-sm font-bold tracking-tight">RAL Finance</h2>
+            <p className="text-xs text-sidebar-foreground/50">Project Tracker</p>
+          </div>
+        </div>
+        <nav className="flex-1 space-y-1 px-3 py-4">
+          <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-widest text-sidebar-foreground/30">Menu</p>
+          {navItems.map((n) => (
+            <button
+              key={n.key}
+              onClick={() => { setView(n.key); setSidebarOpen(false); }}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
+                view === n.key || (n.key === "projects" && view === "project")
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              )}
+            >
+              <n.icon className="h-[18px] w-[18px]" />
+              <span className="flex-1 text-left">{n.label}</span>
+              {n.count > 0 && (
+                <span className="rounded-full bg-sidebar-foreground/10 px-2 py-0.5 text-[11px] font-semibold">{n.count}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="border-t border-sidebar-border p-4 space-y-3">
+          <div className="rounded-lg bg-sidebar-accent/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-sidebar-foreground/50">Total in Bank</span>
+              <Landmark className="h-3.5 w-3.5 text-sidebar-foreground/40" />
+            </div>
+            <p className={cn("text-sm font-bold tabular-nums", totalPhysicalBank >= 0 ? "text-emerald-400" : "text-red-400")}>
+              {currency(totalPhysicalBank)}
+            </p>
+          </div>
+          <div className="rounded-lg bg-sidebar-accent/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-sidebar-foreground/50">Spendable</span>
+              <Wallet className="h-3.5 w-3.5 text-sidebar-foreground/40" />
+            </div>
+            <p className={cn("text-sm font-bold tabular-nums", bankSpendable >= 0 ? "text-emerald-400" : "text-red-400")}>
+              {currency(bankSpendable)}
+            </p>
+          </div>
+          <Separator className="bg-sidebar-border" />
+          <div className="space-y-1">
+            <p className="text-[11px] text-sidebar-foreground/40">Signed in as</p>
+            <p className="text-xs font-medium truncate">{user?.email || "user"}</p>
+          </div>
+          <Button variant="outline" size="sm" className="w-full bg-sidebar-accent/50 border-sidebar-border text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent" onClick={signOut}>
+            <LogOut className="mr-2 h-3.5 w-3.5" /> Sign Out
+          </Button>
         </div>
       </div>
     );
   }
 
-  // --- Sidebar ---
-  function Sidebar() {
-    const navItems = [
-      { key: "dashboard", label: "Dashboard", icon: Icons.dashboard },
-      {
-        key: "projects",
-        label: "Projects",
-        icon: Icons.projects,
-        count: projects.length,
-      },
-      { key: "bank", label: "Bank Savings", icon: Icons.bank },
-      { key: "budgets", label: "Budgets", icon: Icons.expense, count: budgets.length },
-      { key: "recurring", label: "Recurring", icon: Icons.revenue },
-      { key: "reports", label: "Reports", icon: Icons.profit },
-      { key: "secretInvestment", label: "Secret Investment", icon: Icons.charity },
-    ];
-    const handleNavClick = (key) => {
-      setView(key);
-      setSidebarOpen(false);
-    };
-    return (
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-brand">
-          <div className="brand-logo">R</div>
-          <div>
-            <h2>RAL Finance</h2>
-            <span className="brand-sub">Project Tracker</span>
-          </div>
-        </div>
-        <nav>
-          <div className="nav-label">Menu</div>
-          {navItems.map((n) => (
-            <button
-              key={n.key}
-              className={`nav-item ${view === n.key || (n.key === "projects" && view === "project") ? "active" : ""}`}
-              onClick={() => handleNavClick(n.key)}
-            >
-              <span className="nav-icon">{n.icon}</span>
-              <span className="nav-text">{n.label}</span>
-              {n.count > 0 && <span className="nav-badge">{n.count}</span>}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <div className="sidebar-stat">
-            <div className="sidebar-stat-icon bank-icon">{Icons.bank}</div>
-            <div className="sidebar-stat-info">
-              <span>Total in Bank</span>
-              <strong
-                className={
-                  totalPhysicalBank >= 0 ? "text-income" : "text-expense"
-                }
-              >
-                {currency(totalPhysicalBank)}
-              </strong>
-            </div>
-          </div>
-          <div className="sidebar-stat">
-            <div className="sidebar-stat-icon charity-icon">
-              {Icons.charity}
-            </div>
-            <div className="sidebar-stat-info">
-              <span>Secret Investment</span>
-              <strong
-                className={
-                  globalSecretInvestment.balance >= 0 ? "text-income" : "text-expense"
-                }
-              >
-                {currency(globalSecretInvestment.balance)}
-              </strong>
-            </div>
-          </div>
-          <div style={{marginTop: '8px', padding: '6px 10px', background: 'rgba(66, 133, 244, 0.06)', borderRadius: '6px'}}>
-            <div style={{fontSize: '11px', color: '#718096', marginBottom: '2px'}}>Spendable (Bank Share)</div>
-            <div style={{fontSize: '13px', fontWeight: 600, color: bankSpendable >= 0 ? '#38a169' : '#e53e3e'}}>{currency(bankSpendable)}</div>
-          </div>
-          <div
-            style={{
-              marginTop: "20px",
-              paddingTop: "20px",
-              borderTop: "1px solid rgba(0,0,0,0.1)",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "12px",
-                color: "#718096",
-                marginBottom: "10px",
-              }}
-            >
-              Signed in as:
-              <br />
-              <strong style={{ fontSize: "11px" }}>
-                {user?.email || "user@example.com"}
-              </strong>
-            </div>
-            <button
-              onClick={signOut}
-              style={{
-                width: "100%",
-                padding: "8px 12px",
-                background: "#f7fafc",
-                color: "#2d3748",
-                border: "1px solid #cbd5e0",
-                borderRadius: "6px",
-                fontSize: "13px",
-                fontWeight: "500",
-                cursor: "pointer",
-                transition: "all 0.2s ease",
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.background = "#edf2f7";
-                e.target.style.color = "#1a202c";
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.background = "#f7fafc";
-                e.target.style.color = "#2d3748";
-              }}
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-      </aside>
-    );
-  }
+  // ==================== VIEWS ====================
 
   // --- Dashboard ---
   function DashboardView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Dashboard</h1>
-            <p className="page-sub">Overview of all project finances</p>
-          </div>
+      <div className="animate-fade-in-up space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Overview of all project finances</p>
         </div>
 
-        <div className="stats-grid cols-4">
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-blue">{Icons.revenue}</div>
-            <div className="stat-content">
-              <div className="stat-label">Total Revenue</div>
-              <div className="stat-value">{currency(globalRevenue)}</div>
-              <div className="stat-sub">
-                {projects.length} project{projects.length !== 1 ? "s" : ""}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-expense">{Icons.expense}</div>
-            <div className="stat-content">
-              <div className="stat-label">Total Expenses</div>
-              <div className="stat-value text-expense">
-                {currency(globalExpenses)}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-income">{Icons.profit}</div>
-            <div className="stat-content">
-              <div className="stat-label">Net Profit</div>
-              <div className="stat-value text-income">
-                {currency(globalProfit)}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-blue">{Icons.bank}</div>
-            <div className="stat-content">
-              <div className="stat-label">Total in Bank</div>
-              <div className="stat-value text-bank">
-                {currency(totalPhysicalBank)}
-              </div>
-            </div>
-          </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`${projects.length} project${projects.length !== 1 ? "s" : ""}`} variant="income" />
+          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" />
+          <StatCard icon={TrendingUp} label="Net Profit" value={currency(globalProfit)} variant={globalProfit >= 0 ? "income" : "expense"} />
+          <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="bank" />
         </div>
 
-        {/* Profit Distribution */}
         {globalProfit > 0 && (
-          <div className="card">
-            <h2 className="section-title">Profit Distribution</h2>
-            <p className="section-sub">
-              Automatically split 25% each across all projects
-            </p>
-            <div className="distribution-grid">
-              <div className="dist-item">
-                <div
-                  className="dist-bar bg-bank"
-                  style={{ width: "100%" }}
-                ></div>
-                <div className="dist-info">
-                  <span className="dist-label">Bank Savings</span>
-                  <span className="dist-value">
-                    {currency(globalBank.income)}
-                  </span>
-                </div>
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">Profit Distribution</CardTitle>
+              <CardDescription>Automatically split 25% each across all projects</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  { label: "Bank Savings", value: globalBank.income, color: "bg-indigo-500", bg: "bg-indigo-50" },
+                  { label: "Suhaib", value: globalSuhaib, color: "bg-amber-500", bg: "bg-amber-50" },
+                  { label: "Mohammed", value: globalMohammed, color: "bg-violet-500", bg: "bg-violet-50" },
+                  { label: "Secret Investment", value: globalSecretInvestment.income, color: "bg-pink-500", bg: "bg-pink-50" },
+                ].map((d) => (
+                  <div key={d.label} className={cn("rounded-xl p-4", d.bg)}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className={cn("h-2 w-2 rounded-full", d.color)} />
+                      <span className="text-xs font-semibold text-muted-foreground">{d.label}</span>
+                    </div>
+                    <p className="text-lg font-bold tabular-nums">{currency(d.value)}</p>
+                  </div>
+                ))}
               </div>
-              <div className="dist-item">
-                <div
-                  className="dist-bar bg-partner1"
-                  style={{ width: "100%" }}
-                ></div>
-                <div className="dist-info">
-                  <span className="dist-label">Suhaib</span>
-                  <span className="dist-value">{currency(globalSuhaib)}</span>
-                </div>
-              </div>
-              <div className="dist-item">
-                <div
-                  className="dist-bar bg-partner2"
-                  style={{ width: "100%" }}
-                ></div>
-                <div className="dist-info">
-                  <span className="dist-label">Mohammed</span>
-                  <span className="dist-value">{currency(globalMohammed)}</span>
-                </div>
-              </div>
-              <div className="dist-item">
-                <div
-                  className="dist-bar bg-charity"
-                  style={{ width: "100%" }}
-                ></div>
-                <div className="dist-info">
-                  <span className="dist-label">Secret Investment</span>
-                  <span className="dist-value">
-                    {currency(globalSecretInvestment.income)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         )}
 
-        {/* Partner Balances */}
         {globalProfit > 0 && (
-          <div className="card">
-            <h2 className="section-title">Partner Balances</h2>
-            <p className="section-sub">Track withdrawals from partner shares</p>
-            <div className="stats-grid cols-2" style={{marginTop: '20px'}}>
-              {/* Suhaib Card */}
-              <div className="stat-card">
-                <div className="stat-icon-wrap bg-partner1">{Icons.partner}</div>
-                <div className="stat-content">
-                  <div className="stat-label">Suhaib</div>
-                  <div className="stat-value">{currency(suhaibAvailable)}</div>
-                  <div className="stat-sub">
-                    Earned: {currency(globalSuhaib)} | Withdrawn: {currency(suhaibWithdrawn)}
-                  </div>
-                  <button className="btn btn-primary btn-sm" style={{marginTop: '12px'}}
-                    onClick={() => setModal({
-                      title: "Withdraw — Suhaib",
-                      fields: [
-                        { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                        { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                        { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
-                      ],
-                      onSubmit: (v) => addPartnerWithdrawal("suhaib", parseFloat(v.amount), v.date, v.note),
-                    })}
-                  >
-                    {Icons.plus} <span>Withdraw</span>
-                  </button>
-                </div>
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">Partner Balances</CardTitle>
+              <CardDescription>Track withdrawals from partner shares</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                {[
+                  { name: "Suhaib", partner: "suhaib", available: suhaibAvailable, earned: globalSuhaib, withdrawn: suhaibWithdrawn, variant: "partner1", icon: Users },
+                  { name: "Mohammed", partner: "mohammed", available: mohammedAvailable, earned: globalMohammed, withdrawn: mohammedWithdrawn, variant: "partner2", icon: Users },
+                ].map((p) => (
+                  <Card key={p.name} className={cn(p.variant === "partner1" ? "border-amber-200/60" : "border-violet-200/60")}>
+                    <CardContent className="p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", p.variant === "partner1" ? "bg-amber-100 text-amber-600" : "bg-violet-100 text-violet-600")}>
+                            <p.icon className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <p className="font-semibold">{p.name}</p>
+                            <p className="text-xs text-muted-foreground">Earned: {currency(p.earned)}</p>
+                          </div>
+                        </div>
+                        <Button size="sm" onClick={() => setModal({
+                          title: `Withdraw — ${p.name}`,
+                          fields: [
+                            { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                            { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                            { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
+                          ],
+                          onSubmit: (v) => addPartnerWithdrawal(p.partner, parseFloat(v.amount), v.date, v.note),
+                        })}>
+                          <Wallet className="mr-1.5 h-3.5 w-3.5" /> Withdraw
+                        </Button>
+                      </div>
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-2xl font-bold tabular-nums">{currency(p.available)}</span>
+                        <span className="text-xs text-muted-foreground">Withdrawn: {currency(p.withdrawn)}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
-              {/* Mohammed Card */}
-              <div className="stat-card">
-                <div className="stat-icon-wrap bg-partner2">{Icons.partner}</div>
-                <div className="stat-content">
-                  <div className="stat-label">Mohammed</div>
-                  <div className="stat-value">{currency(mohammedAvailable)}</div>
-                  <div className="stat-sub">
-                    Earned: {currency(globalMohammed)} | Withdrawn: {currency(mohammedWithdrawn)}
+              {partnerWithdrawals.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold mb-3">Recent Withdrawals</p>
+                  <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50">
+                          <TableHead>Partner</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Note</TableHead>
+                          <TableHead className="w-10" />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {[...partnerWithdrawals].reverse().map((w) => (
+                          <TableRow key={w.id}>
+                            <TableCell className="font-medium">{w.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
+                            <TableCell className="text-muted-foreground">{formatDate(w.date)}</TableCell>
+                            <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(w.amount)}</Badge></TableCell>
+                            <TableCell className="text-muted-foreground">{w.note || "-"}</TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePartnerWithdrawal(w.id, w.amount)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
-                  <button className="btn btn-primary btn-sm" style={{marginTop: '12px'}}
-                    onClick={() => setModal({
-                      title: "Withdraw — Mohammed",
-                      fields: [
-                        { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                        { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                        { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
-                      ],
-                      onSubmit: (v) => addPartnerWithdrawal("mohammed", parseFloat(v.amount), v.date, v.note),
-                    })}
-                  >
-                    {Icons.plus} <span>Withdraw</span>
-                  </button>
                 </div>
-              </div>
-            </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
-            {/* Withdrawal History */}
-            {partnerWithdrawals.length > 0 && (
-              <div style={{marginTop: '24px'}}>
-                <h3 className="section-title" style={{fontSize: '0.95rem'}}>Withdrawal History</h3>
-                <div className="table-wrap" style={{marginTop: '12px'}}>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Partner</th>
-                        <th>Date</th>
-                        <th>Amount</th>
-                        <th>Note</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...partnerWithdrawals].reverse().map(w => (
-                        <tr key={w.id}>
-                          <td><span className="cell-project">{w.partnerName === 'suhaib' ? 'Suhaib' : 'Mohammed'}</span></td>
-                          <td>{formatDate(w.date)}</td>
-                          <td><span className="amount-pill expense">{currency(w.amount)}</span></td>
-                          <td>{w.note || <span className="text-muted">-</span>}</td>
-                          <td>
-                            <button className="btn btn-danger-ghost btn-xs"
-                              onClick={() => deletePartnerWithdrawal(w.id, w.amount)}>
-                              {Icons.trash}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+        {(budgets.length > 0 || recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">Quick Overview</CardTitle>
+              <CardDescription>Budgets and recurring items at a glance</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {budgets.length > 0 && (
+                  <>
+                    <StatCard label="Budget Allocated" value={currency(totalBudgetAllocated)} sub={`${budgets.length} budget${budgets.length !== 1 ? "s" : ""}`} onClick={() => setView("budgets")} />
+                    <StatCard label="Budget Spent" value={currency(totalBudgetSpent)} variant="expense" sub={totalBudgetAllocated > 0 ? `${Math.round((totalBudgetSpent / totalBudgetAllocated) * 100)}% used` : "0% used"} onClick={() => setView("budgets")} />
+                  </>
+                )}
+                {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
+                  <>
+                    <StatCard label="Recurring Revenue" value={currency(recurringRevenue.filter((r) => r.active).reduce((a, r) => a + r.amount, 0))} variant="income" sub={`${recurringRevenue.filter((r) => r.active).length} active`} onClick={() => setView("recurring")} />
+                    <StatCard label="Recurring Expenses" value={currency(recurringExpenses.filter((r) => r.active).reduce((a, r) => a + r.amount, 0))} variant="expense" sub={`${recurringExpenses.filter((r) => r.active).length} active`} onClick={() => setView("recurring")} />
+                  </>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Projects Overview</CardTitle>
+                <CardDescription>All projects at a glance</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setView("projects")}>
+                <Eye className="mr-1.5 h-3.5 w-3.5" /> View All
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {projectStats.length === 0 ? (
+              <EmptyState icon={FolderKanban} title="No projects yet" description="Create your first project to start tracking finances." action={
+                <Button onClick={() => { setView("projects"); setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000", required: true }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) }); }}>
+                  <Plus className="mr-1.5 h-4 w-4" /> New Project
+                </Button>
+              } />
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead>Project</TableHead>
+                      <TableHead>Value</TableHead>
+                      <TableHead>Paid</TableHead>
+                      <TableHead>Expenses</TableHead>
+                      <TableHead>Profit</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-10" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projectStats.slice().reverse().map((p) => (
+                      <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openProject(p.id)}>
+                        <TableCell className="font-semibold">{p.name}</TableCell>
+                        <TableCell className="tabular-nums">{currency(p.totalValue)}</TableCell>
+                        <TableCell className="tabular-nums text-emerald-600">{currency(p.totalPaid)}</TableCell>
+                        <TableCell className="tabular-nums">{currency(p.totalExpenses)}</TableCell>
+                        <TableCell className={cn("font-semibold tabular-nums", p.profit >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(p.profit)}</TableCell>
+                        <TableCell>
+                          <Badge variant={p.unpaid <= 0 ? "default" : p.totalPaid > 0 ? "secondary" : "outline"} className={cn(p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.totalPaid > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                            {p.unpaid <= 0 ? "Paid" : p.totalPaid > 0 ? "Partial" : "Unpaid"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8"><ChevronRight className="h-4 w-4" /></Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Budget & Recurring Quick Summary */}
-        {(budgets.length > 0 || recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
-          <div className="card">
-            <h2 className="section-title">Quick Overview</h2>
-            <p className="section-sub">Budgets and recurring items at a glance</p>
-            <div className="stats-grid cols-4" style={{marginTop: '20px'}}>
-              {budgets.length > 0 && (
-                <>
-                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('budgets')}>
-                    <div className="stat-content">
-                      <div className="stat-label">Budget Allocated</div>
-                      <div className="stat-value">{currency(totalBudgetAllocated)}</div>
-                      <div className="stat-sub">{budgets.length} budget{budgets.length !== 1 ? 's' : ''}</div>
-                    </div>
-                  </div>
-                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('budgets')}>
-                    <div className="stat-content">
-                      <div className="stat-label">Budget Spent</div>
-                      <div className="stat-value text-expense">{currency(totalBudgetSpent)}</div>
-                      <div className="stat-sub">
-                        {totalBudgetAllocated > 0
-                          ? `${Math.round((totalBudgetSpent / totalBudgetAllocated) * 100)}% used`
-                          : '0% used'}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-              {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
-                <>
-                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('recurring')}>
-                    <div className="stat-content">
-                      <div className="stat-label">Recurring Revenue</div>
-                      <div className="stat-value text-income">
-                        {currency(recurringRevenue.filter(r => r.active).reduce((a, r) => a + r.amount, 0))}
-                      </div>
-                      <div className="stat-sub">
-                        {recurringRevenue.filter(r => r.active).length} active / {recurringRevenue.length} total
-                      </div>
-                    </div>
-                  </div>
-                  <div className="stat-card" style={{cursor: 'pointer'}} onClick={() => setView('recurring')}>
-                    <div className="stat-content">
-                      <div className="stat-label">Recurring Expenses</div>
-                      <div className="stat-value text-expense">
-                        {currency(recurringExpenses.filter(r => r.active).reduce((a, r) => a + r.amount, 0))}
-                      </div>
-                      <div className="stat-sub">
-                        {recurringExpenses.filter(r => r.active).length} active / {recurringExpenses.length} total
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="section-title">Projects Overview</h2>
-              <p className="section-sub">All projects at a glance</p>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => setView("projects")}
-            >
-              {Icons.eye} <span>View All</span>
-            </button>
-          </div>
-          {projectStats.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">{Icons.empty}</div>
-              <h3>No projects yet</h3>
-              <p>Create your first project to start tracking finances.</p>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  setView("projects");
-                  setModal({
-                    title: "New Project",
-                    fields: [
-                      {
-                        name: "name",
-                        label: "Project Name",
-                        placeholder: "e.g. Website Redesign",
-                        required: true,
-                      },
-                      {
-                        name: "totalValue",
-                        label: "Total Project Value (BHD)",
-                        type: "number",
-                        placeholder: "0.00",
-                        required: true,
-                      },
-                    ],
-                    onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)),
-                  });
-                }}
-              >
-                {Icons.plus} <span>New Project</span>
-              </button>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Value</th>
-                    <th>Paid</th>
-                    <th>Unpaid</th>
-                    <th>Expenses</th>
-                    <th>Profit</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectStats
-                    .slice()
-                    .reverse()
-                    .map((p) => (
-                      <tr
-                        key={p.id}
-                        className="clickable-row"
-                        onClick={() => openProject(p.id)}
-                      >
-                        <td>
-                          <span className="cell-project">{p.name}</span>
-                        </td>
-                        <td>{currency(p.totalValue)}</td>
-                        <td className="text-income">{currency(p.totalPaid)}</td>
-                        <td className="text-expense">{currency(p.unpaid)}</td>
-                        <td>{currency(p.totalExpenses)}</td>
-                        <td
-                          className={
-                            p.profit >= 0
-                              ? "text-income font-semibold"
-                              : "text-expense font-semibold"
-                          }
-                        >
-                          {currency(p.profit)}
-                        </td>
-                        <td>
-                          <span
-                            className={`badge ${p.unpaid <= 0 ? "badge-income" : p.totalPaid > 0 ? "badge-warning" : "badge-muted"}`}
-                          >
-                            {p.unpaid <= 0
-                              ? "Paid"
-                              : p.totalPaid > 0
-                                ? "Partial"
-                                : "Unpaid"}
-                          </span>
-                        </td>
-                        <td>
-                          <button className="btn btn-ghost btn-sm">
-                            {Icons.eye}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -1507,147 +991,69 @@ export default function App() {
   // --- Projects List ---
   function ProjectsView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
+      <div className="animate-fade-in-up space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="page-title">Projects</h1>
-            <p className="page-sub">
-              {projects.length} project{projects.length !== 1 ? "s" : ""} total
-            </p>
+            <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
+            <p className="text-sm text-muted-foreground">{projects.length} project{projects.length !== 1 ? "s" : ""} total</p>
           </div>
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              setModal({
-                title: "New Project",
-                fields: [
-                  {
-                    name: "name",
-                    label: "Project Name",
-                    placeholder: "e.g. Website Redesign",
-                    required: true,
-                  },
-                  {
-                    name: "totalValue",
-                    label: "Total Project Value (BHD)",
-                    type: "number",
-                    placeholder: "0.00",
-                    required: true,
-                  },
-                ],
-                onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)),
-              })
-            }
-          >
-            {Icons.plus} <span>New Project</span>
-          </button>
+          <Button onClick={() => setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000", required: true }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) })}>
+            <Plus className="mr-1.5 h-4 w-4" /> New Project
+          </Button>
         </div>
 
         {projectStats.length === 0 ? (
-          <div className="empty-state-card">
-            <div className="empty-icon">{Icons.empty}</div>
-            <h3>No projects yet</h3>
-            <p>Click "New Project" above to create your first one.</p>
-          </div>
+          <Card><CardContent className="p-0">
+            <EmptyState icon={FolderKanban} title="No projects yet" description='Click "New Project" above to create your first one.' />
+          </CardContent></Card>
         ) : (
-          <div className="project-grid">
-            {projectStats
-              .slice()
-              .reverse()
-              .map((p) => {
-                const paidPct =
-                  p.totalValue > 0
-                    ? Math.min(100, (p.totalPaid / p.totalValue) * 100)
-                    : 0;
-                return (
-                  <div
-                    key={p.id}
-                    className="project-card"
-                    onClick={() => openProject(p.id)}
-                  >
-                    <div className="project-card-top">
-                      <div className="project-card-title">
-                        <h3>{p.name}</h3>
-                        <span
-                          className={`badge ${p.unpaid <= 0 ? "badge-income" : p.totalPaid > 0 ? "badge-warning" : "badge-muted"}`}
-                        >
-                          {p.unpaid <= 0
-                            ? "Fully Paid"
-                            : p.totalPaid > 0
-                              ? "Partial"
-                              : "Unpaid"}
-                        </span>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {projectStats.slice().reverse().map((p) => {
+              const paidPct = p.totalValue > 0 ? Math.min(100, (p.totalPaid / p.totalValue) * 100) : 0;
+              return (
+                <Card key={p.id} className="cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => openProject(p.id)}>
+                  <CardContent className="p-0">
+                    <div className="p-5 pb-4">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h3 className="font-semibold text-base">{p.name}</h3>
+                        <Badge variant={p.unpaid <= 0 ? "default" : p.totalPaid > 0 ? "secondary" : "outline"} className={cn("shrink-0", p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.totalPaid > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                          {p.unpaid <= 0 ? "Paid" : p.totalPaid > 0 ? "Partial" : "Unpaid"}
+                        </Badge>
                       </div>
-                      <div className="project-card-value">
-                        {currency(p.totalValue)}
-                      </div>
+                      <p className="text-2xl font-bold tabular-nums tracking-tight">{currency(p.totalValue)}</p>
                     </div>
-
-                    <div className="project-card-progress">
-                      <div className="progress-header">
+                    <div className="px-5 pb-4">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
                         <span>Payment Progress</span>
-                        <span>{Math.round(paidPct)}%</span>
+                        <span className="font-semibold">{Math.round(paidPct)}%</span>
                       </div>
-                      <div className="progress-bar">
-                        <div
-                          className="progress-fill"
-                          style={{ width: `${paidPct}%` }}
-                        ></div>
-                      </div>
+                      <Progress value={paidPct} className="h-2" />
                     </div>
-
-                    <div className="project-card-stats">
-                      <div className="pcs-item">
-                        <span className="pcs-label">Paid</span>
-                        <span className="pcs-value text-income">
-                          {currency(p.totalPaid)}
-                        </span>
-                      </div>
-                      <div className="pcs-item">
-                        <span className="pcs-label">Unpaid</span>
-                        <span className="pcs-value text-expense">
-                          {currency(p.unpaid)}
-                        </span>
-                      </div>
-                      <div className="pcs-item">
-                        <span className="pcs-label">Expenses</span>
-                        <span className="pcs-value">
-                          {currency(p.totalExpenses)}
-                        </span>
-                      </div>
-                      <div className="pcs-item">
-                        <span className="pcs-label">Profit</span>
-                        <span
-                          className={`pcs-value font-semibold ${p.profit >= 0 ? "text-income" : "text-expense"}`}
-                        >
-                          {currency(p.profit)}
-                        </span>
-                      </div>
+                    <div className="grid grid-cols-2 border-t">
+                      {[
+                        { label: "Paid", value: currency(p.totalPaid), color: "text-emerald-600" },
+                        { label: "Unpaid", value: currency(p.unpaid), color: "text-red-500" },
+                        { label: "Expenses", value: currency(p.totalExpenses), color: "" },
+                        { label: "Profit", value: currency(p.profit), color: p.profit >= 0 ? "text-emerald-600" : "text-red-500" },
+                      ].map((s) => (
+                        <div key={s.label} className="border-b border-r last:border-r-0 [&:nth-child(2)]:border-r-0 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                          <p className={cn("text-sm font-semibold tabular-nums", s.color)}>{s.value}</p>
+                        </div>
+                      ))}
                     </div>
-
-                    <div className="project-card-actions">
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openProject(p.id);
-                        }}
-                      >
-                        {Icons.eye} <span>View</span>
-                      </button>
-                      <button
-                        className="btn btn-danger-ghost btn-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteProject(p.id, p.name);
-                        }}
-                      >
-                        {Icons.trash}
-                      </button>
+                    <div className="flex items-center justify-between p-3">
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); openProject(p.id); }}>
+                        <Eye className="mr-1.5 h-3.5 w-3.5" /> View
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={(e) => { e.stopPropagation(); deleteProject(p.id, p.name); }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
-                  </div>
-                );
-              })}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1656,317 +1062,140 @@ export default function App() {
 
   // --- Project Detail ---
   function ProjectDetailView() {
-    if (!selectedProject)
-      return (
-        <div className="empty-state">
-          <p>Project not found.</p>
-        </div>
-      );
+    if (!selectedProject) return <EmptyState icon={FolderKanban} title="Project not found" description="The selected project could not be found." />;
     const p = selectedProject;
-    const paidPct =
-      p.totalValue > 0 ? Math.min(100, (p.totalPaid / p.totalValue) * 100) : 0;
-
+    const paidPct = p.totalValue > 0 ? Math.min(100, (p.totalPaid / p.totalValue) * 100) : 0;
     return (
-      <div className="fade-in">
-        <button
-          className="btn btn-ghost btn-back"
-          onClick={() => setView("projects")}
-        >
-          {Icons.back} <span>Back to Projects</span>
-        </button>
-
-        <div className="page-header">
+      <div className="animate-fade-in-up space-y-6">
+        <Button variant="ghost" size="sm" onClick={() => setView("projects")} className="mb-2">
+          <ArrowLeft className="mr-1.5 h-4 w-4" /> Back to Projects
+        </Button>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="page-title">{p.name}</h1>
-            <p className="page-sub">Project value: {currency(p.totalValue)}</p>
+            <h1 className="text-2xl font-bold tracking-tight">{p.name}</h1>
+            <p className="text-sm text-muted-foreground">Project value: {currency(p.totalValue)}</p>
           </div>
-          <div className="header-actions">
-            <button
-              className="btn btn-ghost"
-              onClick={() =>
-                setModal({
-                  title: "Edit Project",
-                  fields: [
-                    {
-                      name: "name",
-                      label: "Project Name",
-                      default: p.name,
-                      required: true,
-                    },
-                    {
-                      name: "totalValue",
-                      label: "Total Value (BHD)",
-                      type: "number",
-                      default: String(p.totalValue),
-                      required: true,
-                    },
-                  ],
-                  onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)),
-                })
-              }
-            >
-              {Icons.edit} <span>Edit</span>
-            </button>
-            <button
-              className="btn btn-danger-ghost"
-              onClick={() => deleteProject(p.id, p.name)}
-            >
-              {Icons.trash} <span>Delete</span>
-            </button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setModal({ title: "Edit Project", fields: [{ name: "name", label: "Project Name", default: p.name, required: true }, { name: "totalValue", label: "Total Value (BHD)", type: "number", default: String(p.totalValue), required: true }], onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)) })}>
+              <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
+            </Button>
+            <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => deleteProject(p.id, p.name)}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Delete
+            </Button>
           </div>
         </div>
 
-        <div className="stats-grid cols-4">
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-blue">{Icons.revenue}</div>
-            <div className="stat-content">
-              <div className="stat-label">Total Value</div>
-              <div className="stat-value">{currency(p.totalValue)}</div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-income">{Icons.profit}</div>
-            <div className="stat-content">
-              <div className="stat-label">Paid</div>
-              <div className="stat-value text-income">
-                {currency(p.totalPaid)}
-              </div>
-              <div className="progress-bar mini">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${paidPct}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-expense">{Icons.expense}</div>
-            <div className="stat-content">
-              <div className="stat-label">Unpaid</div>
-              <div className="stat-value text-expense">
-                {currency(p.unpaid)}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-icon-wrap bg-profit">{Icons.profit}</div>
-            <div className="stat-content">
-              <div className="stat-label">Net Profit</div>
-              <div
-                className="stat-value"
-                style={{
-                  color: p.profit >= 0 ? "var(--income)" : "var(--expense)",
-                }}
-              >
-                {currency(p.profit)}
-              </div>
-            </div>
-          </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={CircleDollarSign} label="Total Value" value={currency(p.totalValue)} variant="highlight" />
+          <StatCard icon={ArrowUpRight} label="Paid" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% complete`} />
+          <StatCard icon={ArrowDownRight} label="Unpaid" value={currency(p.unpaid)} variant="expense" />
+          <StatCard icon={TrendingUp} label="Net Profit" value={currency(p.profit)} variant={p.profit >= 0 ? "income" : "expense"} />
         </div>
 
-        {/* Profit Split */}
         {p.profit > 0 && (
-          <div className="card">
-            <h2 className="section-title">Profit Split</h2>
-            <p className="section-sub">25% allocation per category</p>
-            <div className="split-grid">
-              <div className="split-item split-bank">
-                <div className="split-icon">{Icons.bank}</div>
-                <div className="split-label">Bank Savings</div>
-                <div className="split-value">{currency(p.bankShare)}</div>
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="text-base">Profit Split</CardTitle>
+              <CardDescription>25% allocation per category</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  { label: "Bank Savings", value: p.bankShare, icon: Landmark, bg: "bg-indigo-50 text-indigo-600" },
+                  { label: "Suhaib", value: p.suhaibShare, icon: Users, bg: "bg-amber-50 text-amber-600" },
+                  { label: "Mohammed", value: p.mohammedShare, icon: Users, bg: "bg-violet-50 text-violet-600" },
+                  { label: "Secret Investment", value: p.secretInvestmentShare, icon: PiggyBank, bg: "bg-pink-50 text-pink-600" },
+                ].map((s) => (
+                  <div key={s.label} className={cn("rounded-xl p-4 text-center", s.bg.split(" ")[0])}>
+                    <s.icon className={cn("h-5 w-5 mx-auto mb-2", s.bg.split(" ")[1])} />
+                    <p className="text-[11px] font-semibold uppercase tracking-wider opacity-70">{s.label}</p>
+                    <p className="text-lg font-bold tabular-nums mt-1">{currency(s.value)}</p>
+                  </div>
+                ))}
               </div>
-              <div className="split-item split-partner1">
-                <div className="split-icon">{Icons.partner}</div>
-                <div className="split-label">Suhaib</div>
-                <div className="split-value">{currency(p.suhaibShare)}</div>
-              </div>
-              <div className="split-item split-partner2">
-                <div className="split-icon">{Icons.partner}</div>
-                <div className="split-label">Mohammed</div>
-                <div className="split-value">{currency(p.mohammedShare)}</div>
-              </div>
-              <div className="split-item split-charity">
-                <div className="split-icon">{Icons.charity}</div>
-                <div className="split-label">Secret Investment</div>
-                <div className="split-value">{currency(p.secretInvestmentShare)}</div>
-              </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Payments */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="section-title">Payments</h2>
-              <p className="section-sub">
-                {(p.payments || []).length} payment
-                {(p.payments || []).length !== 1 ? "s" : ""} recorded
-              </p>
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Payments</CardTitle>
+                <CardDescription>{(p.payments || []).length} payment{(p.payments || []).length !== 1 ? "s" : ""} recorded</CardDescription>
+              </div>
+              <Button size="sm" onClick={() => setModal({ title: "Add Payment", fields: [{ name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }, { name: "note", label: "Note", placeholder: "Payment note (optional)" }], onSubmit: (v) => addPayment(p.id, parseFloat(v.amount), v.date, v.note) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Payment
+              </Button>
             </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() =>
-                setModal({
-                  title: "Add Payment",
-                  fields: [
-                    {
-                      name: "amount",
-                      label: "Amount (BHD)",
-                      type: "number",
-                      placeholder: "0.00",
-                      required: true,
-                    },
-                    {
-                      name: "date",
-                      label: "Date",
-                      type: "date",
-                      default: new Date().toISOString().split("T")[0],
-                      required: true,
-                    },
-                    {
-                      name: "note",
-                      label: "Note",
-                      placeholder: "Payment note (optional)",
-                    },
-                  ],
-                  onSubmit: (v) => addPayment(p.id, parseFloat(v.amount), v.date, v.note),
-                })
-              }
-            >
-              {Icons.plus} <span>Add Payment</span>
-            </button>
-          </div>
-          {(p.payments || []).length === 0 ? (
-            <p className="text-muted-block">
-              No payments recorded yet. Add your first payment above.
-            </p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>Note</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...(p.payments || [])].reverse().map((pay) => (
-                    <tr key={pay.id}>
-                      <td>{formatDate(pay.date)}</td>
-                      <td>
-                        <span className="amount-pill income">
-                          {currency(pay.amount)}
-                        </span>
-                      </td>
-                      <td>
-                        {pay.note || <span className="text-muted">-</span>}
-                      </td>
-                      <td>
-                        <button
-                          className="btn btn-danger-ghost btn-xs"
-                          onClick={() =>
-                            deletePayment(p.id, pay.id, pay.amount)
-                          }
-                        >
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+          </CardHeader>
+          <CardContent>
+            {(p.payments || []).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No payments recorded yet.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Note</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                  <TableBody>
+                    {[...(p.payments || [])].reverse().map((pay) => (
+                      <TableRow key={pay.id}>
+                        <TableCell className="text-muted-foreground">{formatDate(pay.date)}</TableCell>
+                        <TableCell><Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 tabular-nums font-semibold">{currency(pay.amount)}</Badge></TableCell>
+                        <TableCell className="text-muted-foreground">{pay.note || "-"}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePayment(p.id, pay.id, pay.amount)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Expenses */}
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="section-title">Expenses</h2>
-              <p className="section-sub">
-                {(p.expenses || []).length} expense
-                {(p.expenses || []).length !== 1 ? "s" : ""} recorded
-              </p>
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Expenses</CardTitle>
+                <CardDescription>{(p.expenses || []).length} expense{(p.expenses || []).length !== 1 ? "s" : ""} recorded</CardDescription>
+              </div>
+              <Button size="sm" onClick={() => setModal({ title: "Add Expense", fields: [{ name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }, { name: "description", label: "Description", placeholder: "What was this expense for?", required: true }], onSubmit: (v) => addExpense(p.id, parseFloat(v.amount), v.date, v.description) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Expense
+              </Button>
             </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() =>
-                setModal({
-                  title: "Add Expense",
-                  fields: [
-                    {
-                      name: "amount",
-                      label: "Amount (BHD)",
-                      type: "number",
-                      placeholder: "0.00",
-                      required: true,
-                    },
-                    {
-                      name: "date",
-                      label: "Date",
-                      type: "date",
-                      default: new Date().toISOString().split("T")[0],
-                      required: true,
-                    },
-                    {
-                      name: "description",
-                      label: "Description",
-                      placeholder: "What was this expense for?",
-                      required: true,
-                    },
-                  ],
-                  onSubmit: (v) =>
-                    addExpense(p.id, parseFloat(v.amount), v.date, v.description),
-                })
-              }
-            >
-              {Icons.plus} <span>Add Expense</span>
-            </button>
-          </div>
-          {(p.expenses || []).length === 0 ? (
-            <p className="text-muted-block">No expenses recorded yet.</p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>Description</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...(p.expenses || [])].reverse().map((exp) => (
-                    <tr key={exp.id}>
-                      <td>{formatDate(exp.date)}</td>
-                      <td>
-                        <span className="amount-pill expense">
-                          {currency(exp.amount)}
-                        </span>
-                      </td>
-                      <td>{exp.description}</td>
-                      <td>
-                        <button
-                          className="btn btn-danger-ghost btn-xs"
-                          onClick={() =>
-                            deleteExpense(p.id, exp.id, exp.amount)
-                          }
-                        >
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+          </CardHeader>
+          <CardContent>
+            {(p.expenses || []).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No expenses recorded yet.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Description</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                  <TableBody>
+                    {[...(p.expenses || [])].reverse().map((exp) => (
+                      <TableRow key={exp.id}>
+                        <TableCell className="text-muted-foreground">{formatDate(exp.date)}</TableCell>
+                        <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(exp.amount)}</Badge></TableCell>
+                        <TableCell>{exp.description}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteExpense(p.id, exp.id, exp.amount)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -1974,250 +1203,110 @@ export default function App() {
   // --- Bank View ---
   function BankView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Bank Savings</h1>
-            <p className="page-sub">
-              25% of all project profits go to bank savings
-            </p>
-          </div>
+      <div className="animate-fade-in-up space-y-6">
+        <div><h1 className="text-2xl font-bold tracking-tight">Bank Savings</h1><p className="text-sm text-muted-foreground">25% of all project profits go to bank savings</p></div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="highlight" />
+          <StatCard icon={ArrowUpRight} label="Bank Share (25%)" value={currency(globalBank.income)} variant="income" sub="From project profits" />
+          <StatCard icon={ArrowDownRight} label="Bank Spent" value={currency(globalBank.spent)} variant="expense" sub={`${bankSpending.length} transaction${bankSpending.length !== 1 ? "s" : ""}`} />
+          <StatCard icon={Wallet} label="Bank Available" value={currency(bankSpendable)} variant="bank" sub="Share minus spending" />
         </div>
 
-        <div className="stats-grid cols-4">
-          <div className="stat-card highlight-card" style={{background: 'rgba(66, 133, 244, 0.08)', borderColor: 'rgba(66, 133, 244, 0.2)'}}>
-            <div className="stat-content">
-              <div className="stat-label">Total in Bank</div>
-              <div className="stat-value" style={{color: '#4285f4'}}>
-                {currency(totalPhysicalBank)}
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Money Allocation</CardTitle><CardDescription>How the total bank balance is distributed</CardDescription></CardHeader>
+          <CardContent className="space-y-3">
+            {[
+              { label: "Bank Savings (spendable)", value: bankSpendable, color: "bg-indigo-500" },
+              { label: "Suhaib (in bank)", value: suhaibAvailable, color: "bg-amber-500" },
+              { label: "Mohammed (in bank)", value: mohammedAvailable, color: "bg-violet-500" },
+              { label: "Secret Investment (in bank)", value: globalSecretInvestment.balance, color: "bg-pink-500" },
+            ].map((item) => (
+              <div key={item.label} className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-3">
+                  <div className={cn("h-3 w-3 rounded-full", item.color)} />
+                  <span className="text-sm">{item.label}</span>
+                </div>
+                <span className="text-sm font-semibold tabular-nums">{currency(item.value)}</span>
               </div>
-              <div className="stat-sub">All money in account</div>
+            ))}
+            <Separator />
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-sm font-bold text-primary">Total in Bank</span>
+              <span className="text-sm font-bold text-primary tabular-nums">{currency(totalPhysicalBank)}</span>
             </div>
-          </div>
-          <div className="stat-card highlight-card bg-income-soft">
-            <div className="stat-content">
-              <div className="stat-label">Bank Share (25%)</div>
-              <div className="stat-value text-income">
-                {currency(globalBank.income)}
-              </div>
-              <div className="stat-sub">From project profits</div>
-            </div>
-          </div>
-          <div className="stat-card highlight-card bg-expense-soft">
-            <div className="stat-content">
-              <div className="stat-label">Bank Spent</div>
-              <div className="stat-value text-expense">
-                {currency(globalBank.spent)}
-              </div>
-              <div className="stat-sub">
-                {bankSpending.length} transaction
-                {bankSpending.length !== 1 ? "s" : ""}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card highlight-card bg-bank-soft">
-            <div className="stat-content">
-              <div className="stat-label">Bank Available</div>
-              <div className="stat-value text-bank">
-                {currency(bankSpendable)}
-              </div>
-              <div className="stat-sub">Share minus bank &amp; budget spent</div>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
-        <div className="card">
-          <h2 className="section-title">Money Allocation</h2>
-          <p className="section-sub">How the total bank balance is distributed</p>
-          <div className="distribution-grid">
-            <div className="dist-item">
-              <div className="dist-bar bg-bank" style={{width: '100%'}}></div>
-              <div className="dist-info">
-                <span className="dist-label">Bank Savings (spendable)</span>
-                <span className="dist-value">{currency(bankSpendable)}</span>
-              </div>
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div><CardTitle className="text-base">Spending History</CardTitle><CardDescription>Independent of project expenses</CardDescription></div>
+              <Button size="sm" onClick={() => setModal({ title: "Spend from Bank", fields: [{ name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }, { name: "description", label: "Description", placeholder: "What was this for?", required: true }], onSubmit: (v) => addBankSpending(parseFloat(v.amount), v.date, v.description) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Record Spending
+              </Button>
             </div>
-            <div className="dist-item">
-              <div className="dist-bar bg-partner1" style={{width: '100%'}}></div>
-              <div className="dist-info">
-                <span className="dist-label">Suhaib (in bank)</span>
-                <span className="dist-value">{currency(suhaibAvailable)}</span>
+          </CardHeader>
+          <CardContent>
+            {bankSpending.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No spending recorded from bank savings yet.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Description</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                  <TableBody>
+                    {[...bankSpending].reverse().map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell className="text-muted-foreground">{formatDate(s.date)}</TableCell>
+                        <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(s.amount)}</Badge></TableCell>
+                        <TableCell>{s.description}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteBankSpending(s.id, s.amount)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
-            </div>
-            <div className="dist-item">
-              <div className="dist-bar bg-partner2" style={{width: '100%'}}></div>
-              <div className="dist-info">
-                <span className="dist-label">Mohammed (in bank)</span>
-                <span className="dist-value">{currency(mohammedAvailable)}</span>
-              </div>
-            </div>
-            <div className="dist-item">
-              <div className="dist-bar bg-charity" style={{width: '100%'}}></div>
-              <div className="dist-info">
-                <span className="dist-label">Secret Investment (in bank)</span>
-                <span className="dist-value">{currency(globalSecretInvestment.balance)}</span>
-              </div>
-            </div>
-          </div>
-          <div style={{marginTop: '16px', paddingTop: '12px', borderTop: '1.5px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <span style={{fontSize: '0.85rem', fontWeight: 700, color: '#4285f4'}}>Total in Bank</span>
-            <span style={{fontSize: '0.95rem', fontWeight: 700, color: '#4285f4'}}>{currency(totalPhysicalBank)}</span>
-          </div>
-        </div>
+            )}
+          </CardContent>
+        </Card>
 
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="section-title">Spending History</h2>
-              <p className="section-sub">Independent of project expenses</p>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() =>
-                setModal({
-                  title: "Spend from Bank",
-                  fields: [
-                    {
-                      name: "amount",
-                      label: "Amount (BHD)",
-                      type: "number",
-                      placeholder: "0.00",
-                      required: true,
-                    },
-                    {
-                      name: "date",
-                      label: "Date",
-                      type: "date",
-                      default: new Date().toISOString().split("T")[0],
-                      required: true,
-                    },
-                    {
-                      name: "description",
-                      label: "Description",
-                      placeholder: "What was this for?",
-                      required: true,
-                    },
-                  ],
-                  onSubmit: (v) =>
-                    addBankSpending(parseFloat(v.amount), v.date, v.description),
-                })
-              }
-            >
-              {Icons.plus} <span>Record Spending</span>
-            </button>
-          </div>
-          {bankSpending.length === 0 ? (
-            <p className="text-muted-block">
-              No spending recorded from bank savings yet.
-            </p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>Description</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...bankSpending].reverse().map((s) => (
-                    <tr key={s.id}>
-                      <td>{formatDate(s.date)}</td>
-                      <td>
-                        <span className="amount-pill expense">
-                          {currency(s.amount)}
-                        </span>
-                      </td>
-                      <td>{s.description}</td>
-                      <td>
-                        <button
-                          className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteBankSpending(s.id, s.amount)}
-                        >
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <h2 className="section-title">Contributions by Project</h2>
-          <p className="section-sub">
-            How much each project contributed to bank savings
-          </p>
-          {projectStats.filter((p) => p.bankShare > 0).length === 0 ? (
-            <p className="text-muted-block">
-              No contributions yet. Profits from projects will appear here.
-            </p>
-          ) : (
-            <div className="contributions-list">
-              {projectStats
-                .filter((p) => p.bankShare > 0)
-                .map((p) => (
-                  <div
-                    key={p.id}
-                    className="contribution-row"
-                    onClick={() => openProject(p.id)}
-                  >
-                    <span className="contribution-name">{p.name}</span>
-                    <span className="contribution-amount text-income">
-                      {currency(p.bankShare)}
-                    </span>
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Contributions by Project</CardTitle><CardDescription>How much each project contributed to bank savings</CardDescription></CardHeader>
+          <CardContent>
+            {projectStats.filter((p) => p.bankShare > 0).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No contributions yet.</p>
+            ) : (
+              <div className="space-y-1">
+                {projectStats.filter((p) => p.bankShare > 0).map((p) => (
+                  <div key={p.id} className="flex items-center justify-between rounded-lg px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => openProject(p.id)}>
+                    <span className="text-sm font-medium">{p.name}</span>
+                    <span className="text-sm font-semibold text-emerald-600 tabular-nums">{currency(p.bankShare)}</span>
                   </div>
                 ))}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (() => {
-          const monthlyRev = recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0);
-          const monthlyExp = recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0);
-          const yearlyRev = recurringRevenue.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0);
-          const yearlyExp = recurringExpenses.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0);
+          const monthlyRev = recurringRevenue.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0);
+          const monthlyExp = recurringExpenses.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0);
           const netMonthly = monthlyRev - monthlyExp;
           return (
-            <div className="card">
-              <h2 className="section-title">Recurring Impact</h2>
-              <p className="section-sub">Projected monthly cash flow from recurring items</p>
-              <div className="stats-grid cols-3" style={{marginTop: '16px'}}>
-                <div className="stat-card highlight-card bg-income-soft">
-                  <div className="stat-content">
-                    <div className="stat-label">Monthly Revenue</div>
-                    <div className="stat-value text-income">{currency(monthlyRev)}</div>
-                    <div className="stat-sub">{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length} active item{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length !== 1 ? 's' : ''}</div>
-                  </div>
+            <Card>
+              <CardHeader className="pb-4"><CardTitle className="text-base">Recurring Impact</CardTitle><CardDescription>Projected monthly cash flow from recurring items</CardDescription></CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <StatCard label="Monthly Revenue" value={currency(monthlyRev)} variant="income" />
+                  <StatCard label="Monthly Expenses" value={currency(monthlyExp)} variant="expense" />
+                  <StatCard label="Net Monthly" value={currency(netMonthly)} variant={netMonthly >= 0 ? "income" : "expense"} />
                 </div>
-                <div className="stat-card highlight-card bg-expense-soft">
-                  <div className="stat-content">
-                    <div className="stat-label">Monthly Expenses</div>
-                    <div className="stat-value text-expense">{currency(monthlyExp)}</div>
-                    <div className="stat-sub">{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length} active item{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length !== 1 ? 's' : ''}</div>
-                  </div>
-                </div>
-                <div className="stat-card highlight-card bg-bank-soft">
-                  <div className="stat-content">
-                    <div className="stat-label">Net Monthly</div>
-                    <div className="stat-value" style={{color: netMonthly >= 0 ? 'var(--income)' : 'var(--expense)'}}>{currency(netMonthly)}</div>
-                    <div className="stat-sub">Projected impact</div>
-                  </div>
-                </div>
-              </div>
-              {(yearlyRev > 0 || yearlyExp > 0) && (
-                <div style={{marginTop: '12px', padding: '10px 14px', background: 'rgba(0,0,0,0.02)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)'}}>
-                  Yearly: {currency(yearlyRev)} revenue / {currency(yearlyExp)} expenses (net {currency(yearlyRev - yearlyExp)}/yr)
-                </div>
-              )}
-              <div style={{marginTop: '12px', padding: '10px 14px', background: 'rgba(66, 133, 244, 0.05)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5'}}>
-                Recurring items are projections — actual amounts are tracked through project payments and expenses
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           );
         })()}
       </div>
@@ -2227,143 +1316,85 @@ export default function App() {
   // --- Budgets View ---
   function BudgetsView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Budgets</h1>
-            <p className="page-sub">
-              {budgets.length} budget{budgets.length !== 1 ? "s" : ""} total
-            </p>
-          </div>
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              setModal({
-                title: "New Budget",
-                fields: [
-                  { name: "name", label: "Budget Name", placeholder: "e.g. Marketing", required: true },
-                  { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                  { name: "description", label: "Description", placeholder: "Budget description" },
-                ],
-                onSubmit: (v) => addBudget(v.name, parseFloat(v.allocatedAmount), v.description),
-              })
-            }
-          >
-            {Icons.plus} <span>New Budget</span>
-          </button>
+      <div className="animate-fade-in-up space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div><h1 className="text-2xl font-bold tracking-tight">Budgets</h1><p className="text-sm text-muted-foreground">{budgets.length} budget{budgets.length !== 1 ? "s" : ""} total</p></div>
+          <Button onClick={() => setModal({ title: "New Budget", fields: [{ name: "name", label: "Budget Name", placeholder: "e.g. Marketing", required: true }, { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "description", label: "Description", placeholder: "Budget description" }], onSubmit: (v) => addBudget(v.name, parseFloat(v.allocatedAmount), v.description) })}>
+            <Plus className="mr-1.5 h-4 w-4" /> New Budget
+          </Button>
         </div>
 
-        <div className="stats-grid cols-3">
-          <div className="stat-card highlight-card bg-income-soft">
-            <div className="stat-content">
-              <div className="stat-label">Total Allocated</div>
-              <div className="stat-value text-income">{currency(totalBudgetAllocated)}</div>
-              <div className="stat-sub">Across {budgets.length} budget{budgets.length !== 1 ? "s" : ""}</div>
-            </div>
-          </div>
-          <div className="stat-card highlight-card bg-expense-soft">
-            <div className="stat-content">
-              <div className="stat-label">Total Spent</div>
-              <div className="stat-value text-expense">{currency(totalBudgetSpent)}</div>
-            </div>
-          </div>
-          <div className="stat-card highlight-card bg-bank-soft">
-            <div className="stat-content">
-              <div className="stat-label">Total Remaining</div>
-              <div className="stat-value" style={{color: (totalBudgetAllocated - totalBudgetSpent) >= 0 ? 'var(--income)' : 'var(--expense)'}}>
-                {currency(totalBudgetAllocated - totalBudgetSpent)}
-              </div>
-            </div>
-          </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard icon={Target} label="Total Allocated" value={currency(totalBudgetAllocated)} variant="income" sub={`${budgets.length} budget${budgets.length !== 1 ? "s" : ""}`} />
+          <StatCard icon={ArrowDownRight} label="Total Spent" value={currency(totalBudgetSpent)} variant="expense" />
+          <StatCard icon={Wallet} label="Total Remaining" value={currency(totalBudgetAllocated - totalBudgetSpent)} variant={(totalBudgetAllocated - totalBudgetSpent) >= 0 ? "income" : "expense"} />
         </div>
 
         {budgetStats.length === 0 ? (
-          <div className="empty-state-card">
-            <div className="empty-icon">{Icons.empty}</div>
-            <h3>No budgets yet</h3>
-            <p>Click "New Budget" above to create your first one.</p>
-          </div>
+          <Card><CardContent className="p-0">
+            <EmptyState icon={Target} title="No budgets yet" description='Click "New Budget" above to create your first one.' />
+          </CardContent></Card>
         ) : (
-          <div className="project-grid">
-            {budgetStats.map(b => {
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {budgetStats.map((b) => {
               const pct = b.allocatedAmount > 0 ? Math.min(100, (b.spent / b.allocatedAmount) * 100) : 0;
               return (
-                <div key={b.id} className="card">
-                  <div className="card-header">
+                <Card key={b.id}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <CardTitle className="text-base">{b.name}</CardTitle>
+                        {b.description && <CardDescription>{b.description}</CardDescription>}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setModal({ title: "Edit Budget", fields: [{ name: "name", label: "Budget Name", default: b.name, required: true }, { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", default: String(b.allocatedAmount), required: true }, { name: "description", label: "Description", default: b.description || "", placeholder: "Budget description" }], onSubmit: (v) => editBudget(b.id, v.name, parseFloat(v.allocatedAmount), v.description) })}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteBudget(b.id, b.name)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
                     <div>
-                      <h3 className="section-title">{b.name}</h3>
-                      {b.description && <p className="section-sub">{b.description}</p>}
+                      <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
+                        <span>Usage</span>
+                        <span className={cn("font-semibold", pct > 90 && "text-red-500")}>{Math.round(pct)}%</span>
+                      </div>
+                      <Progress value={pct} className={cn("h-2", pct > 90 && "[&>div]:bg-red-500")} />
                     </div>
-                    <div style={{display:'flex', gap:'6px'}}>
-                      <button className="btn btn-ghost btn-xs" onClick={() => setModal({
-                        title: "Edit Budget",
-                        fields: [
-                          { name: "name", label: "Budget Name", default: b.name, required: true },
-                          { name: "allocatedAmount", label: "Allocated Amount (BHD)", type: "number", default: String(b.allocatedAmount), required: true },
-                          { name: "description", label: "Description", default: b.description || "", placeholder: "Budget description" },
-                        ],
-                        onSubmit: (v) => editBudget(b.id, v.name, parseFloat(v.allocatedAmount), v.description),
-                      })}>{Icons.edit}</button>
-                      <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteBudget(b.id, b.name)}>{Icons.trash}</button>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div><p className="text-[11px] font-semibold text-muted-foreground uppercase">Allocated</p><p className="text-sm font-bold tabular-nums">{currency(b.allocatedAmount)}</p></div>
+                      <div><p className="text-[11px] font-semibold text-muted-foreground uppercase">Spent</p><p className="text-sm font-bold tabular-nums text-red-600">{currency(b.spent)}</p></div>
+                      <div><p className="text-[11px] font-semibold text-muted-foreground uppercase">Left</p><p className={cn("text-sm font-bold tabular-nums", b.remaining >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(b.remaining)}</p></div>
                     </div>
-                  </div>
-
-                  <div style={{marginBottom:'16px'}}>
-                    <div className="progress-header">
-                      <span>Budget Usage</span>
-                      <span>{Math.round(pct)}%</span>
-                    </div>
-                    <div className="progress-bar">
-                      <div className="progress-fill" style={{width: `${pct}%`, background: pct > 90 ? 'linear-gradient(90deg, var(--expense), #f87171)' : undefined}}></div>
-                    </div>
-                  </div>
-
-                  <div className="stats-grid cols-3" style={{marginBottom:'16px'}}>
-                    <div style={{textAlign:'center'}}>
-                      <div className="stat-label">Allocated</div>
-                      <div style={{fontSize:'1.05rem', fontWeight:600}}>{currency(b.allocatedAmount)}</div>
-                    </div>
-                    <div style={{textAlign:'center'}}>
-                      <div className="stat-label">Spent</div>
-                      <div style={{fontSize:'1.05rem', fontWeight:600}} className="text-expense">{currency(b.spent)}</div>
-                    </div>
-                    <div style={{textAlign:'center'}}>
-                      <div className="stat-label">Remaining</div>
-                      <div style={{fontSize:'1.05rem', fontWeight:600}} className={b.remaining >= 0 ? 'text-income' : 'text-expense'}>{currency(b.remaining)}</div>
-                    </div>
-                  </div>
-
-                  <button className="btn btn-primary btn-sm" onClick={() => setModal({
-                    title: "Add Spending — " + b.name,
-                    fields: [
-                      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                      { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                      { name: "description", label: "Description", placeholder: "What was this for?", required: true },
-                    ],
-                    onSubmit: (v) => addBudgetSpending(b.id, parseFloat(v.amount), v.date, v.description),
-                  })}>
-                    {Icons.plus} <span>Add Spending</span>
-                  </button>
-
-                  {/* Spending history */}
-                  {(b.spending || []).length > 0 && (
-                    <div className="table-wrap" style={{marginTop:'16px'}}>
-                      <table>
-                        <thead><tr><th>Date</th><th>Amount</th><th>Description</th><th></th></tr></thead>
-                        <tbody>
-                          {[...(b.spending || [])].reverse().map(s => (
-                            <tr key={s.id}>
-                              <td>{formatDate(s.date)}</td>
-                              <td><span className="amount-pill expense">{currency(s.amount)}</span></td>
-                              <td>{s.description}</td>
-                              <td><button className="btn btn-danger-ghost btn-xs" onClick={() => deleteBudgetSpending(s.id, s.amount)}>{Icons.trash}</button></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+                    <Button size="sm" className="w-full" onClick={() => setModal({ title: "Add Spending — " + b.name, fields: [{ name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }, { name: "description", label: "Description", placeholder: "What was this for?", required: true }], onSubmit: (v) => addBudgetSpending(b.id, parseFloat(v.amount), v.date, v.description) })}>
+                      <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Spending
+                    </Button>
+                    {(b.spending || []).length > 0 && (
+                      <div className="rounded-lg border overflow-hidden">
+                        <Table>
+                          <TableHeader><TableRow className="bg-muted/50"><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Description</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                          <TableBody>
+                            {[...(b.spending || [])].reverse().map((s) => (
+                              <TableRow key={s.id}>
+                                <TableCell className="text-muted-foreground text-xs">{formatDate(s.date)}</TableCell>
+                                <TableCell><Badge variant="destructive" className="tabular-nums text-xs">{currency(s.amount)}</Badge></TableCell>
+                                <TableCell className="text-xs">{s.description}</TableCell>
+                                <TableCell>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-600" onClick={() => deleteBudgetSpending(s.id, s.amount)}>
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               );
             })}
           </div>
@@ -2375,161 +1406,111 @@ export default function App() {
   // --- Recurring View ---
   function RecurringView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Recurring</h1>
-            <p className="page-sub">
-              {recurringRevenue.length} revenue &middot; {recurringExpenses.length} expense items
-            </p>
-          </div>
-        </div>
+      <div className="animate-fade-in-up space-y-6">
+        <div><h1 className="text-2xl font-bold tracking-tight">Recurring</h1><p className="text-sm text-muted-foreground">{recurringRevenue.length} revenue &middot; {recurringExpenses.length} expense items</p></div>
 
-        {/* Recurring Revenue Section */}
-        <div className="card" style={{marginBottom: '24px'}}>
-          <div className="card-header">
-            <h3 className="section-title">Recurring Revenue</h3>
-            <button
-              className="btn btn-primary"
-              onClick={() =>
-                setModal({
-                  title: "Add Recurring Revenue",
-                  fields: [
-                    { name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true },
-                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
-                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
-                    { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                  ],
-                  onSubmit: (v) => addRecurringRevenue(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate),
-                })
-              }
-            >
-              {Icons.plus} <span>Add Revenue</span>
-            </button>
-          </div>
-          {recurringRevenue.length === 0 ? (
-            <div className="empty-state-card">
-              <div className="empty-icon">{Icons.empty}</div>
-              <h3>No recurring revenue</h3>
-              <p>Click "Add Revenue" to add a recurring revenue stream.</p>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th>Amount</th>
-                    <th>Frequency</th>
-                    <th>Project</th>
-                    <th>Next Due</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recurringRevenue.map((item) => (
-                    <tr key={item.id}>
-                      <td style={{fontWeight: 500}}>{item.description}</td>
-                      <td className="text-income">{currency(item.amount)}</td>
-                      <td>{item.frequency.charAt(0).toUpperCase() + item.frequency.slice(1)}</td>
-                      <td>{projects.find(p => p.id === item.projectId)?.name || 'General'}</td>
-                      <td>{formatDate(item.nextDue)}</td>
-                      <td>
-                        <button
-                          className={`badge ${item.active ? 'badge-income' : 'badge-muted'}`}
-                          style={{cursor: 'pointer', border: 'none'}}
-                          onClick={() => toggleRecurringRevenue(item.id, item.active)}
-                        >
-                          {item.active ? 'Active' : 'Paused'}
-                        </button>
-                      </td>
-                      <td>
-                        <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteRecurringRevenue(item.id, item.description)}>
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <Tabs defaultValue="revenue" className="w-full">
+          <TabsList className="w-full sm:w-auto">
+            <TabsTrigger value="revenue" className="flex-1 sm:flex-initial">Revenue ({recurringRevenue.length})</TabsTrigger>
+            <TabsTrigger value="expenses" className="flex-1 sm:flex-initial">Expenses ({recurringExpenses.length})</TabsTrigger>
+          </TabsList>
 
-        {/* Recurring Expenses Section */}
-        <div className="card">
-          <div className="card-header">
-            <h3 className="section-title">Recurring Expenses</h3>
-            <button
-              className="btn btn-primary"
-              onClick={() =>
-                setModal({
-                  title: "Add Recurring Expense",
-                  fields: [
-                    { name: "description", label: "Description", placeholder: "e.g. Office rent", required: true },
-                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.00", required: true },
-                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
-                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
-                    { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                  ],
-                  onSubmit: (v) => addRecurringExpense(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate),
-                })
-              }
-            >
-              {Icons.plus} <span>Add Expense</span>
-            </button>
-          </div>
-          {recurringExpenses.length === 0 ? (
-            <div className="empty-state-card">
-              <div className="empty-icon">{Icons.empty}</div>
-              <h3>No recurring expenses</h3>
-              <p>Click "Add Expense" to add a recurring expense.</p>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th>Amount</th>
-                    <th>Frequency</th>
-                    <th>Project</th>
-                    <th>Next Due</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recurringExpenses.map((item) => (
-                    <tr key={item.id}>
-                      <td style={{fontWeight: 500}}>{item.description}</td>
-                      <td className="text-expense">{currency(item.amount)}</td>
-                      <td>{item.frequency.charAt(0).toUpperCase() + item.frequency.slice(1)}</td>
-                      <td>{projects.find(p => p.id === item.projectId)?.name || 'General'}</td>
-                      <td>{formatDate(item.nextDue)}</td>
-                      <td>
-                        <button
-                          className={`badge ${item.active ? 'badge-income' : 'badge-muted'}`}
-                          style={{cursor: 'pointer', border: 'none'}}
-                          onClick={() => toggleRecurringExpense(item.id, item.active)}
-                        >
-                          {item.active ? 'Active' : 'Paused'}
-                        </button>
-                      </td>
-                      <td>
-                        <button className="btn btn-danger-ghost btn-xs" onClick={() => deleteRecurringExpense(item.id, item.description)}>
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+          <TabsContent value="revenue" className="mt-4">
+            <Card>
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">Recurring Revenue</CardTitle>
+                  <Button size="sm" onClick={() => setModal({ title: "Add Recurring Revenue", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" }, { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }], onSubmit: (v) => addRecurringRevenue(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate) })}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Revenue
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {recurringRevenue.length === 0 ? (
+                  <EmptyState icon={Repeat} title="No recurring revenue" description="Add a recurring revenue stream to track projected income." />
+                ) : (
+                  <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {recurringRevenue.map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell className="font-medium">{item.description}</TableCell>
+                            <TableCell className="text-emerald-600 tabular-nums font-semibold">{currency(item.amount)}</TableCell>
+                            <TableCell><Badge variant="outline">{item.frequency}</Badge></TableCell>
+                            <TableCell className="text-muted-foreground">{projects.find((p) => p.id === item.projectId)?.name || "General"}</TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="sm" className={cn("h-7 text-xs", item.active ? "text-emerald-600" : "text-muted-foreground")} onClick={() => toggleRecurringRevenue(item.id, item.active)}>
+                                <Badge variant={item.active ? "default" : "secondary"} className={cn(item.active && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100")}>
+                                  {item.active ? "Active" : "Paused"}
+                                </Badge>
+                              </Button>
+                            </TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringRevenue(item.id, item.description)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="expenses" className="mt-4">
+            <Card>
+              <CardHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">Recurring Expenses</CardTitle>
+                  <Button size="sm" onClick={() => setModal({ title: "Add Recurring Expense", fields: [{ name: "description", label: "Description", placeholder: "e.g. Office rent", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" }, { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }], onSubmit: (v) => addRecurringExpense(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate) })}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Expense
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {recurringExpenses.length === 0 ? (
+                  <EmptyState icon={Repeat} title="No recurring expenses" description="Add recurring expenses to track projected costs." />
+                ) : (
+                  <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {recurringExpenses.map((item) => (
+                          <TableRow key={item.id}>
+                            <TableCell className="font-medium">{item.description}</TableCell>
+                            <TableCell className="text-red-600 tabular-nums font-semibold">{currency(item.amount)}</TableCell>
+                            <TableCell><Badge variant="outline">{item.frequency}</Badge></TableCell>
+                            <TableCell className="text-muted-foreground">{projects.find((p) => p.id === item.projectId)?.name || "General"}</TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="sm" onClick={() => toggleRecurringExpense(item.id, item.active)}>
+                                <Badge variant={item.active ? "default" : "secondary"} className={cn(item.active && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100")}>
+                                  {item.active ? "Active" : "Paused"}
+                                </Badge>
+                              </Button>
+                            </TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringExpense(item.id, item.description)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     );
   }
@@ -2537,565 +1518,312 @@ export default function App() {
   // --- Secret Investment View ---
   function SecretInvestmentView() {
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Secret Investment</h1>
-            <p className="page-sub">25% of all project profits go to secret investment</p>
-          </div>
+      <div className="animate-fade-in-up space-y-6">
+        <div><h1 className="text-2xl font-bold tracking-tight">Secret Investment</h1><p className="text-sm text-muted-foreground">25% of all project profits go to secret investment</p></div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard icon={ArrowUpRight} label="Total Accumulated" value={currency(globalSecretInvestment.income)} variant="income" sub="From project profits" />
+          <StatCard icon={ArrowDownRight} label="Total Spent" value={currency(globalSecretInvestment.spent)} variant="expense" sub={`${secretInvestmentSpending.length} transaction${secretInvestmentSpending.length !== 1 ? "s" : ""}`} />
+          <StatCard icon={PiggyBank} label="Current Balance" value={currency(globalSecretInvestment.balance)} variant="secret" />
         </div>
 
-        <div className="stats-grid cols-3">
-          <div className="stat-card highlight-card bg-income-soft">
-            <div className="stat-content">
-              <div className="stat-label">Total Accumulated</div>
-              <div className="stat-value text-income">
-                {currency(globalSecretInvestment.income)}
-              </div>
-              <div className="stat-sub">From project profits</div>
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div><CardTitle className="text-base">Spending History</CardTitle><CardDescription>Independent of project expenses</CardDescription></div>
+              <Button size="sm" onClick={() => setModal({ title: "Spend from Secret Investment", fields: [{ name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }, { name: "description", label: "Description", placeholder: "What was this for?", required: true }], onSubmit: (v) => addSecretInvestmentSpending(parseFloat(v.amount), v.date, v.description) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Record Spending
+              </Button>
             </div>
-          </div>
-          <div className="stat-card highlight-card bg-expense-soft">
-            <div className="stat-content">
-              <div className="stat-label">Total Spent</div>
-              <div className="stat-value text-expense">
-                {currency(globalSecretInvestment.spent)}
+          </CardHeader>
+          <CardContent>
+            {secretInvestmentSpending.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No spending recorded yet.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Description</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                  <TableBody>
+                    {[...secretInvestmentSpending].reverse().map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell className="text-muted-foreground">{formatDate(s.date)}</TableCell>
+                        <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(s.amount)}</Badge></TableCell>
+                        <TableCell>{s.description}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteSecretInvestmentSpending(s.id, s.amount)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
-              <div className="stat-sub">
-                {secretInvestmentSpending.length} transaction
-                {secretInvestmentSpending.length !== 1 ? "s" : ""}
-              </div>
-            </div>
-          </div>
-          <div className="stat-card highlight-card bg-charity-soft">
-            <div className="stat-content">
-              <div className="stat-label">Current Balance</div>
-              <div className="stat-value text-charity">
-                {currency(globalSecretInvestment.balance)}
-              </div>
-            </div>
-          </div>
-        </div>
+            )}
+          </CardContent>
+        </Card>
 
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="section-title">Spending History</h2>
-              <p className="section-sub">Independent of project expenses</p>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() =>
-                setModal({
-                  title: "Spend from Secret Investment",
-                  fields: [
-                    {
-                      name: "amount",
-                      label: "Amount (BHD)",
-                      type: "number",
-                      placeholder: "0.00",
-                      required: true,
-                    },
-                    {
-                      name: "date",
-                      label: "Date",
-                      type: "date",
-                      default: new Date().toISOString().split("T")[0],
-                      required: true,
-                    },
-                    {
-                      name: "description",
-                      label: "Description",
-                      placeholder: "What was this for?",
-                      required: true,
-                    },
-                  ],
-                  onSubmit: (v) =>
-                    addSecretInvestmentSpending(parseFloat(v.amount), v.date, v.description),
-                })
-              }
-            >
-              {Icons.plus} <span>Record Spending</span>
-            </button>
-          </div>
-          {secretInvestmentSpending.length === 0 ? (
-            <p className="text-muted-block">
-              No spending recorded from secret investment funds yet.
-            </p>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>Description</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...secretInvestmentSpending].reverse().map((s) => (
-                    <tr key={s.id}>
-                      <td>{formatDate(s.date)}</td>
-                      <td>
-                        <span className="amount-pill expense">
-                          {currency(s.amount)}
-                        </span>
-                      </td>
-                      <td>{s.description}</td>
-                      <td>
-                        <button
-                          className="btn btn-danger-ghost btn-xs"
-                          onClick={() => deleteSecretInvestmentSpending(s.id, s.amount)}
-                        >
-                          {Icons.trash}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="card">
-          <h2 className="section-title">Contributions by Project</h2>
-          <p className="section-sub">
-            How much each project contributed to secret investment
-          </p>
-          {projectStats.filter((p) => p.secretInvestmentShare > 0).length === 0 ? (
-            <p className="text-muted-block">
-              No contributions yet. Profits from projects will appear here.
-            </p>
-          ) : (
-            <div className="contributions-list">
-              {projectStats
-                .filter((p) => p.secretInvestmentShare > 0)
-                .map((p) => (
-                  <div
-                    key={p.id}
-                    className="contribution-row"
-                    onClick={() => openProject(p.id)}
-                  >
-                    <span className="contribution-name">{p.name}</span>
-                    <span className="contribution-amount text-income">
-                      {currency(p.secretInvestmentShare)}
-                    </span>
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Contributions by Project</CardTitle><CardDescription>How much each project contributed</CardDescription></CardHeader>
+          <CardContent>
+            {projectStats.filter((p) => p.secretInvestmentShare > 0).length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No contributions yet.</p>
+            ) : (
+              <div className="space-y-1">
+                {projectStats.filter((p) => p.secretInvestmentShare > 0).map((p) => (
+                  <div key={p.id} className="flex items-center justify-between rounded-lg px-3 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => openProject(p.id)}>
+                    <span className="text-sm font-medium">{p.name}</span>
+                    <span className="text-sm font-semibold text-emerald-600 tabular-nums">{currency(p.secretInvestmentShare)}</span>
                   </div>
                 ))}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
+  // --- Reports View ---
   function ReportsView() {
-    const filterByMonth = (dateStr) => {
-      if (!dateStr) return false;
-      return dateStr.startsWith(reportMonth);
-    };
-
-    // Monthly payments (revenue)
-    const monthlyPayments = projectStats.flatMap(p =>
-      (p.payments || []).filter(pay => filterByMonth(pay.date))
-    );
+    const filterByMonth = (dateStr) => dateStr && dateStr.startsWith(reportMonth);
+    const monthlyPayments = projectStats.flatMap((p) => (p.payments || []).filter((pay) => filterByMonth(pay.date)));
     const monthlyRevenue = monthlyPayments.reduce((a, p) => a + p.amount, 0);
-
-    // Monthly project expenses
-    const monthlyProjectExpenses = projectStats.flatMap(p =>
-      (p.expenses || []).filter(exp => filterByMonth(exp.date))
-    );
+    const monthlyProjectExpenses = projectStats.flatMap((p) => (p.expenses || []).filter((exp) => filterByMonth(exp.date)));
     const monthlyExpenses = monthlyProjectExpenses.reduce((a, e) => a + e.amount, 0);
-
-    // Monthly bank spending
-    const monthlyBankSpending = bankSpending.filter(s => filterByMonth(s.date));
-    const monthlyBankSpent = monthlyBankSpending.reduce((a, s) => a + s.amount, 0);
-
-    // Monthly secret investment spending
-    const monthlySecretSpending = secretInvestmentSpending.filter(s => filterByMonth(s.date));
-    const monthlySecretSpent = monthlySecretSpending.reduce((a, s) => a + s.amount, 0);
-
-    // Monthly partner withdrawals
-    const monthlySuhaibWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'suhaib' && filterByMonth(w.date));
-    const monthlyMohammedWithdrawals = partnerWithdrawals.filter(w => w.partnerName === 'mohammed' && filterByMonth(w.date));
-    const monthlySuhaibWithdrawn = monthlySuhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
-    const monthlyMohammedWithdrawn = monthlyMohammedWithdrawals.reduce((a, w) => a + w.amount, 0);
-
-    // Monthly budget spending
-    const monthlyBudgetSpending = budgetStats.flatMap(b =>
-      (b.spending || []).filter(s => filterByMonth(s.date))
-    );
-    const monthlyBudgetSpent = monthlyBudgetSpending.reduce((a, s) => a + s.amount, 0);
-
+    const monthlyBankSpent = bankSpending.filter((s) => filterByMonth(s.date)).reduce((a, s) => a + s.amount, 0);
+    const monthlySecretSpent = secretInvestmentSpending.filter((s) => filterByMonth(s.date)).reduce((a, s) => a + s.amount, 0);
+    const monthlySuhaibWithdrawn = partnerWithdrawals.filter((w) => w.partnerName === "suhaib" && filterByMonth(w.date)).reduce((a, w) => a + w.amount, 0);
+    const monthlyMohammedWithdrawn = partnerWithdrawals.filter((w) => w.partnerName === "mohammed" && filterByMonth(w.date)).reduce((a, w) => a + w.amount, 0);
+    const monthlyBudgetSpent = budgetStats.flatMap((b) => (b.spending || []).filter((s) => filterByMonth(s.date))).reduce((a, s) => a + s.amount, 0);
     const monthlyProfit = monthlyRevenue - monthlyExpenses;
     const monthlyTotalOutflow = monthlyExpenses + monthlyBankSpent + monthlySecretSpent + monthlySuhaibWithdrawn + monthlyMohammedWithdrawn + monthlyBudgetSpent;
 
     return (
-      <div className="fade-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Reports</h1>
-            <p className="page-sub">Financial reports and analytics</p>
-          </div>
-          <input type="month" value={reportMonth} onChange={e => setReportMonth(e.target.value)}
-            style={{padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: 'var(--radius-sm)',
-            fontSize: '0.9rem', fontFamily: 'inherit', background: 'var(--bg)', color: 'var(--text)', outline: 'none'}} />
+      <div className="animate-fade-in-up space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div><h1 className="text-2xl font-bold tracking-tight">Reports</h1><p className="text-sm text-muted-foreground">Financial reports and analytics</p></div>
+          <Input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-auto" />
         </div>
 
-        {/* Report 1: Monthly Profit & Loss */}
-        <div className="card">
-          <h2 className="section-title">Profit & Loss — {new Date(reportMonth + '-01').toLocaleDateString('en-US', {month: 'long', year: 'numeric'})}</h2>
-          <p className="section-sub">Revenue vs expenses for the selected month</p>
-          <div className="stats-grid cols-4" style={{marginTop: '20px'}}>
-            <div className="stat-card highlight-card bg-income-soft">
-              <div className="stat-content"><div className="stat-label">Revenue</div><div className="stat-value text-income">{currency(monthlyRevenue)}</div><div className="stat-sub">{monthlyPayments.length} payment{monthlyPayments.length !== 1 ? 's' : ''}</div></div>
+        <Card>
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">Profit & Loss — {new Date(reportMonth + "-01").toLocaleDateString("en-US", { month: "long", year: "numeric" })}</CardTitle>
+            <CardDescription>Revenue vs expenses for the selected month</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard label="Revenue" value={currency(monthlyRevenue)} variant="income" sub={`${monthlyPayments.length} payment${monthlyPayments.length !== 1 ? "s" : ""}`} />
+              <StatCard label="Expenses" value={currency(monthlyExpenses)} variant="expense" sub={`${monthlyProjectExpenses.length} expense${monthlyProjectExpenses.length !== 1 ? "s" : ""}`} />
+              <StatCard label="Net Profit" value={currency(monthlyProfit)} variant={monthlyProfit >= 0 ? "income" : "expense"} />
+              <StatCard label="Total Outflow" value={currency(monthlyTotalOutflow)} variant="bank" sub="All spending combined" />
             </div>
-            <div className="stat-card highlight-card bg-expense-soft">
-              <div className="stat-content"><div className="stat-label">Project Expenses</div><div className="stat-value text-expense">{currency(monthlyExpenses)}</div><div className="stat-sub">{monthlyProjectExpenses.length} expense{monthlyProjectExpenses.length !== 1 ? 's' : ''}</div></div>
-            </div>
-            <div className="stat-card highlight-card" style={{background: monthlyProfit >= 0 ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #fef2f2, #fee2e2)'}}>
-              <div className="stat-content"><div className="stat-label">Net Profit</div><div className="stat-value" style={{color: monthlyProfit >= 0 ? 'var(--income)' : 'var(--expense)'}}>{currency(monthlyProfit)}</div></div>
-            </div>
-            <div className="stat-card highlight-card bg-bank-soft">
-              <div className="stat-content"><div className="stat-label">Total Outflow</div><div className="stat-value text-bank">{currency(monthlyTotalOutflow)}</div><div className="stat-sub">All spending combined</div></div>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
-        {/* Report 2: Partner Summary */}
-        <div className="card">
-          <h2 className="section-title">Partner Summary</h2>
-          <p className="section-sub">All-time earnings and withdrawals</p>
-          <div className="stats-grid cols-2" style={{marginTop: '20px'}}>
-            <div className="stat-card">
-              <div className="stat-icon-wrap bg-partner1">{Icons.partner}</div>
-              <div className="stat-content">
-                <div className="stat-label">Suhaib</div>
-                <div className="stat-value">{currency(suhaibAvailable)}</div>
-                <div className="stat-sub">Earned: {currency(globalSuhaib)} · Withdrawn: {currency(suhaibWithdrawn)}</div>
-                {monthlySuhaibWithdrawn > 0 && <div className="stat-sub">This month: {currency(monthlySuhaibWithdrawn)} withdrawn</div>}
-              </div>
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Partner Summary</CardTitle><CardDescription>All-time earnings and withdrawals</CardDescription></CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <StatCard icon={Users} label="Suhaib" value={currency(suhaibAvailable)} variant="partner1" sub={`Earned: ${currency(globalSuhaib)} · Withdrawn: ${currency(suhaibWithdrawn)}`} />
+              <StatCard icon={Users} label="Mohammed" value={currency(mohammedAvailable)} variant="partner2" sub={`Earned: ${currency(globalMohammed)} · Withdrawn: ${currency(mohammedWithdrawn)}`} />
             </div>
-            <div className="stat-card">
-              <div className="stat-icon-wrap bg-partner2">{Icons.partner}</div>
-              <div className="stat-content">
-                <div className="stat-label">Mohammed</div>
-                <div className="stat-value">{currency(mohammedAvailable)}</div>
-                <div className="stat-sub">Earned: {currency(globalMohammed)} · Withdrawn: {currency(mohammedWithdrawn)}</div>
-                {monthlyMohammedWithdrawn > 0 && <div className="stat-sub">This month: {currency(monthlyMohammedWithdrawn)} withdrawn</div>}
-              </div>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
-        {/* Report 3: Budget Utilization */}
-        <div className="card">
-          <h2 className="section-title">Budget Utilization</h2>
-          <p className="section-sub">How budgets are being used</p>
-          {budgetStats.length === 0 ? (
-            <p className="text-muted-block">No budgets created yet.</p>
-          ) : (
-            <div style={{marginTop: '16px'}}>
-              {budgetStats.map(b => {
-                const pct = b.allocatedAmount > 0 ? Math.min(100, (b.spent / b.allocatedAmount) * 100) : 0;
-                return (
-                  <div key={b.id} style={{marginBottom: '16px', padding: '16px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)'}}>
-                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px'}}>
-                      <span style={{fontWeight:600, fontSize:'0.9rem'}}>{b.name}</span>
-                      <span style={{fontSize:'0.82rem', color:'var(--text-secondary)'}}>{currency(b.spent)} / {currency(b.allocatedAmount)}</span>
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Budget Utilization</CardTitle><CardDescription>How budgets are being used</CardDescription></CardHeader>
+          <CardContent>
+            {budgetStats.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No budgets created yet.</p>
+            ) : (
+              <div className="space-y-4">
+                {budgetStats.map((b) => {
+                  const pct = b.allocatedAmount > 0 ? Math.min(100, (b.spent / b.allocatedAmount) * 100) : 0;
+                  return (
+                    <div key={b.id} className="rounded-lg bg-muted/30 p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold">{b.name}</span>
+                        <span className="text-xs text-muted-foreground tabular-nums">{currency(b.spent)} / {currency(b.allocatedAmount)}</span>
+                      </div>
+                      <Progress value={pct} className={cn("h-2", pct > 90 && "[&>div]:bg-red-500", pct > 70 && pct <= 90 && "[&>div]:bg-amber-500")} />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>{Math.round(pct)}% used</span>
+                        <span>{currency(b.remaining)} remaining</span>
+                      </div>
                     </div>
-                    <div className="progress-bar">
-                      <div className="progress-fill" style={{width:`${pct}%`, background: pct > 90 ? 'linear-gradient(90deg, var(--expense), #f87171)' : pct > 70 ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : undefined}}></div>
-                    </div>
-                    <div style={{display:'flex', justifyContent:'space-between', marginTop:'4px', fontSize:'0.75rem', color:'var(--text-muted)'}}>
-                      <span>{Math.round(pct)}% used</span>
-                      <span>{currency(b.remaining)} remaining</span>
-                    </div>
-                  </div>
-                );
-              })}
-              <div style={{marginTop:'16px', padding:'12px 16px', background:'var(--bg)', borderRadius:'var(--radius-sm)', display:'flex', justifyContent:'space-between'}}>
-                <span style={{fontWeight:600}}>Total</span>
-                <span style={{fontWeight:600}}>{currency(totalBudgetSpent)} / {currency(totalBudgetAllocated)}</span>
+                  );
+                })}
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Report 3b: Recurring Obligations */}
         {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
-          <div className="card">
-            <h2 className="section-title">Recurring Obligations</h2>
-            <p className="section-sub">Active recurring revenue and expenses</p>
-            <div className="stats-grid cols-3" style={{marginTop: '20px'}}>
-              <div className="stat-card highlight-card bg-income-soft">
-                <div className="stat-content">
-                  <div className="stat-label">Monthly Revenue</div>
-                  <div className="stat-value text-income">
-                    {currency(recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0))}
-                  </div>
-                  <div className="stat-sub">{recurringRevenue.filter(r => r.active && r.frequency === 'monthly').length} active</div>
-                </div>
+          <Card>
+            <CardHeader className="pb-4"><CardTitle className="text-base">Recurring Obligations</CardTitle><CardDescription>Active recurring revenue and expenses</CardDescription></CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <StatCard label="Monthly Revenue" value={currency(recurringRevenue.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0))} variant="income" sub={`${recurringRevenue.filter((r) => r.active && r.frequency === "monthly").length} active`} />
+                <StatCard label="Monthly Expenses" value={currency(recurringExpenses.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0))} variant="expense" sub={`${recurringExpenses.filter((r) => r.active && r.frequency === "monthly").length} active`} />
+                <StatCard label="Net Monthly" value={currency(recurringRevenue.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0) - recurringExpenses.filter((r) => r.active && r.frequency === "monthly").reduce((a, r) => a + r.amount, 0))} variant="bank" />
               </div>
-              <div className="stat-card highlight-card bg-expense-soft">
-                <div className="stat-content">
-                  <div className="stat-label">Monthly Expenses</div>
-                  <div className="stat-value text-expense">
-                    {currency(recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0))}
-                  </div>
-                  <div className="stat-sub">{recurringExpenses.filter(r => r.active && r.frequency === 'monthly').length} active</div>
-                </div>
-              </div>
-              <div className="stat-card highlight-card bg-bank-soft">
-                <div className="stat-content">
-                  <div className="stat-label">Net Monthly Recurring</div>
-                  <div className="stat-value" style={{color:
-                    (recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0) -
-                     recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0)) >= 0
-                    ? 'var(--income)' : 'var(--expense)'}}>
-                    {currency(
-                      recurringRevenue.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0) -
-                      recurringExpenses.filter(r => r.active && r.frequency === 'monthly').reduce((a, r) => a + r.amount, 0)
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-            {recurringRevenue.filter(r => r.active && r.frequency === 'yearly').length > 0 || recurringExpenses.filter(r => r.active && r.frequency === 'yearly').length > 0 ? (
-              <div style={{marginTop:'16px', padding:'12px 16px', background:'var(--bg)', borderRadius:'var(--radius-sm)', fontSize:'0.85rem', color:'var(--text-secondary)'}}>
-                Yearly: {currency(recurringRevenue.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0))} revenue
-                {' '}&middot;{' '}
-                {currency(recurringExpenses.filter(r => r.active && r.frequency === 'yearly').reduce((a, r) => a + r.amount, 0))} expenses
-              </div>
-            ) : null}
-          </div>
+            </CardContent>
+          </Card>
         )}
 
-        {/* Report 4: Cash Flow Summary */}
-        <div className="card">
-          <h2 className="section-title">Cash Flow Summary</h2>
-          <p className="section-sub">All-time money movement</p>
-          <div className="table-wrap" style={{marginTop: '16px'}}>
-            <table>
-              <thead><tr><th>Category</th><th>Inflow</th><th>Outflow</th><th>Net</th></tr></thead>
-              <tbody>
-                <tr>
-                  <td><span className="cell-project">Project Revenue</span></td>
-                  <td className="text-income">{currency(globalRevenue)}</td>
-                  <td>-</td>
-                  <td className="text-income">{currency(globalRevenue)}</td>
-                </tr>
-                <tr>
-                  <td><span className="cell-project">Project Expenses</span></td>
-                  <td>-</td>
-                  <td className="text-expense">{currency(globalExpenses)}</td>
-                  <td className="text-expense">-{currency(globalExpenses)}</td>
-                </tr>
-                <tr>
-                  <td><span className="cell-project">Bank Spending</span></td>
-                  <td>-</td>
-                  <td className="text-expense">{currency(globalBank.spent)}</td>
-                  <td className="text-expense">-{currency(globalBank.spent)}</td>
-                </tr>
-                <tr>
-                  <td><span className="cell-project">Secret Investment Spending</span></td>
-                  <td>-</td>
-                  <td className="text-expense">{currency(globalSecretInvestment.spent)}</td>
-                  <td className="text-expense">-{currency(globalSecretInvestment.spent)}</td>
-                </tr>
-                <tr>
-                  <td><span className="cell-project">Partner Withdrawals</span></td>
-                  <td>-</td>
-                  <td className="text-expense">{currency(suhaibWithdrawn + mohammedWithdrawn)}</td>
-                  <td className="text-expense">-{currency(suhaibWithdrawn + mohammedWithdrawn)}</td>
-                </tr>
-                <tr>
-                  <td><span className="cell-project">Budget Spending</span></td>
-                  <td>-</td>
-                  <td className="text-expense">{currency(totalBudgetSpent)}</td>
-                  <td className="text-expense">-{currency(totalBudgetSpent)}</td>
-                </tr>
-                <tr style={{borderTop:'2px solid var(--border)', fontWeight:700}}>
-                  <td>Net Cash Position</td>
-                  <td className="text-income">{currency(globalRevenue)}</td>
-                  <td className="text-expense">{currency(globalExpenses + globalBank.spent + globalSecretInvestment.spent + suhaibWithdrawn + mohammedWithdrawn + totalBudgetSpent)}</td>
-                  <td className={totalPhysicalBank >= 0 ? 'text-income' : 'text-expense'} style={{fontWeight:700}}>{currency(totalPhysicalBank)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Report 5: Project Performance */}
-        <div className="card">
-          <h2 className="section-title">Project Performance</h2>
-          <p className="section-sub">Profitability breakdown by project</p>
-          {projectStats.length === 0 ? (
-            <p className="text-muted-block">No projects yet.</p>
-          ) : (
-            <div className="table-wrap" style={{marginTop: '16px'}}>
-              <table>
-                <thead><tr><th>Project</th><th>Value</th><th>Revenue</th><th>Expenses</th><th>Profit</th><th>Margin</th></tr></thead>
-                <tbody>
-                  {projectStats.slice().reverse().map(p => {
-                    const margin = p.totalPaid > 0 ? ((p.profit / p.totalPaid) * 100).toFixed(1) : '0.0';
-                    return (
-                      <tr key={p.id} className="clickable-row" onClick={() => openProject(p.id)}>
-                        <td><span className="cell-project">{p.name}</span></td>
-                        <td>{currency(p.totalValue)}</td>
-                        <td className="text-income">{currency(p.totalPaid)}</td>
-                        <td className="text-expense">{currency(p.totalExpenses)}</td>
-                        <td className={p.profit >= 0 ? 'text-income font-semibold' : 'text-expense font-semibold'}>{currency(p.profit)}</td>
-                        <td><span className={`badge ${parseFloat(margin) >= 50 ? 'badge-income' : parseFloat(margin) >= 0 ? 'badge-warning' : 'badge-muted'}`}>{margin}%</span></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Cash Flow Summary</CardTitle><CardDescription>All-time money movement</CardDescription></CardHeader>
+          <CardContent>
+            <div className="rounded-lg border overflow-hidden">
+              <Table>
+                <TableHeader><TableRow className="bg-muted/50"><TableHead>Category</TableHead><TableHead>Inflow</TableHead><TableHead>Outflow</TableHead><TableHead>Net</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {[
+                    { cat: "Project Revenue", inflow: globalRevenue, outflow: 0 },
+                    { cat: "Project Expenses", inflow: 0, outflow: globalExpenses },
+                    { cat: "Bank Spending", inflow: 0, outflow: globalBank.spent },
+                    { cat: "Secret Investment Spending", inflow: 0, outflow: globalSecretInvestment.spent },
+                    { cat: "Partner Withdrawals", inflow: 0, outflow: suhaibWithdrawn + mohammedWithdrawn },
+                    { cat: "Budget Spending", inflow: 0, outflow: totalBudgetSpent },
+                  ].map((r) => (
+                    <TableRow key={r.cat}>
+                      <TableCell className="font-medium">{r.cat}</TableCell>
+                      <TableCell className={cn("tabular-nums", r.inflow > 0 && "text-emerald-600 font-semibold")}>{r.inflow > 0 ? currency(r.inflow) : "-"}</TableCell>
+                      <TableCell className={cn("tabular-nums", r.outflow > 0 && "text-red-600 font-semibold")}>{r.outflow > 0 ? currency(r.outflow) : "-"}</TableCell>
+                      <TableCell className={cn("tabular-nums font-semibold", (r.inflow - r.outflow) >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(r.inflow - r.outflow)}</TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow className="border-t-2 font-bold">
+                    <TableCell>Net Cash Position</TableCell>
+                    <TableCell className="text-emerald-600 tabular-nums">{currency(globalRevenue)}</TableCell>
+                    <TableCell className="text-red-600 tabular-nums">{currency(globalExpenses + globalBank.spent + globalSecretInvestment.spent + suhaibWithdrawn + mohammedWithdrawn + totalBudgetSpent)}</TableCell>
+                    <TableCell className={cn("tabular-nums", totalPhysicalBank >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(totalPhysicalBank)}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
             </div>
-          )}
-        </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Project Performance</CardTitle><CardDescription>Profitability breakdown by project</CardDescription></CardHeader>
+          <CardContent>
+            {projectStats.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No projects yet.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Project</TableHead><TableHead>Value</TableHead><TableHead>Revenue</TableHead><TableHead>Expenses</TableHead><TableHead>Profit</TableHead><TableHead>Margin</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {projectStats.slice().reverse().map((p) => {
+                      const margin = p.totalPaid > 0 ? ((p.profit / p.totalPaid) * 100).toFixed(1) : "0.0";
+                      return (
+                        <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openProject(p.id)}>
+                          <TableCell className="font-semibold">{p.name}</TableCell>
+                          <TableCell className="tabular-nums">{currency(p.totalValue)}</TableCell>
+                          <TableCell className="tabular-nums text-emerald-600">{currency(p.totalPaid)}</TableCell>
+                          <TableCell className="tabular-nums text-red-600">{currency(p.totalExpenses)}</TableCell>
+                          <TableCell className={cn("tabular-nums font-semibold", p.profit >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(p.profit)}</TableCell>
+                          <TableCell>
+                            <Badge variant={parseFloat(margin) >= 50 ? "default" : "secondary"} className={cn(parseFloat(margin) >= 50 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", parseFloat(margin) < 0 && "bg-red-100 text-red-700 hover:bg-red-100")}>
+                              {margin}%
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  // --- Render ---
-  if (!loaded)
+  // ==================== RENDER ====================
+  if (!loaded) {
     return (
-      <div className="loading-screen">
-        <div className="loading-brand">
-          <div className="brand-logo lg">R</div>
-          <h2>RAL Finance</h2>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-violet-500 text-xl font-extrabold text-white">
+            R
+          </div>
+          <h2 className="text-lg font-bold tracking-tight">RAL Finance</h2>
         </div>
-        <div className="loading-bar">
-          <div className="loading-bar-fill"></div>
+        <div className="h-1 w-48 overflow-hidden rounded-full bg-muted">
+          <div className="h-full w-2/5 animate-pulse rounded-full bg-primary" style={{ animation: "loading-slide 1s ease infinite" }} />
         </div>
+        <style>{`@keyframes loading-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
       </div>
     );
+  }
 
   return (
-    <div className="app-layout">
-      {sidebarOpen && (
-        <div
-          className="sidebar-overlay"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <Sidebar />
-      <main className="main-content">
-        <div className="mobile-header">
-          <button
-            className="hamburger-btn"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Toggle menu"
-          >
-            <span></span>
-            <span></span>
-            <span></span>
-          </button>
+    <div className="flex min-h-screen">
+      {/* Desktop Sidebar */}
+      <aside className="hidden w-[272px] shrink-0 border-r border-sidebar-border md:block">
+        <div className="fixed top-0 left-0 bottom-0 w-[272px] overflow-y-auto">
+          <SidebarContent />
         </div>
-        {view === "dashboard" && <DashboardView />}
-        {view === "projects" && <ProjectsView />}
-        {view === "project" && <ProjectDetailView />}
-        {view === "bank" && <BankView />}
-        {view === "budgets" && <BudgetsView />}
-        {view === "recurring" && <RecurringView />}
-        {view === "reports" && <ReportsView />}
-        {view === "secretInvestment" && <SecretInvestmentView />}
+      </aside>
+
+      {/* Mobile Sidebar */}
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent side="left" className="w-[280px] p-0">
+          <SidebarContent />
+        </SheetContent>
+      </Sheet>
+
+      {/* Main Content */}
+      <main className="flex-1 min-w-0">
+        {/* Mobile Header */}
+        <div className="sticky top-0 z-40 flex items-center gap-3 border-b bg-background/95 backdrop-blur px-4 py-3 md:hidden">
+          <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={() => setSidebarOpen(true)}>
+            <Menu className="h-4 w-4" />
+          </Button>
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-violet-500 text-xs font-bold text-white">R</div>
+            <span className="text-sm font-bold">RAL Finance</span>
+          </div>
+        </div>
+
+        <div className="mx-auto max-w-[1400px] p-4 sm:p-6 lg:p-8">
+          {view === "dashboard" && <DashboardView />}
+          {view === "projects" && <ProjectsView />}
+          {view === "project" && <ProjectDetailView />}
+          {view === "bank" && <BankView />}
+          {view === "budgets" && <BudgetsView />}
+          {view === "recurring" && <RecurringView />}
+          {view === "reports" && <ReportsView />}
+          {view === "secretInvestment" && <SecretInvestmentView />}
+        </div>
       </main>
+
+      {/* Modal */}
       {modal && <ModalForm {...modal} onClose={() => setModal(null)} />}
-      {/* Enhanced Toast */}
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>
-          <div className="toast-content">
-            {toast.type === "success" ? (
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-              </svg>
-            ) : (
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-              </svg>
-            )}
-            <span>{toast.msg}</span>
-          </div>
-        </div>
-      )}
-      {/* Confirmation Dialog */}
-      {confirm && (
-        <div
-          className="modal-overlay"
-          onClick={() => !loading && setConfirm(null)}
-        >
-          <div
-            className="modal confirm-modal"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <h3>{confirm.title}</h3>
-              {!loading && (
-                <button
-                  className="btn-icon"
-                  onClick={() => setConfirm(null)}
-                  aria-label="Close"
-                >
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              )}
-            </div>
-            <div className="modal-body">
-              <p>{confirm.message}</p>
-            </div>
-            <div className="modal-actions">
-              <button
-                className="btn btn-ghost"
-                onClick={() => setConfirm(null)}
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button
-                className={`btn ${confirm.isDangerous ? "btn-danger" : "btn-primary"}`}
-                onClick={async () => {
-                  await confirm.onConfirm();
-                }}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner"></span>
-                    Processing...
-                  </>
-                ) : (
-                  confirm.action
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
+      {/* Confirm Dialog */}
+      <Dialog open={!!confirm} onOpenChange={(open) => { if (!open && !loading) setConfirm(null); }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {confirm?.isDangerous && <AlertTriangle className="h-5 w-5 text-red-500" />}
+              {confirm?.title}
+            </DialogTitle>
+            <DialogDescription>{confirm?.message}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirm(null)} disabled={loading}>Cancel</Button>
+            <Button variant={confirm?.isDangerous ? "destructive" : "default"} onClick={async () => { await confirm?.onConfirm(); }} disabled={loading}>
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {loading ? "Processing..." : confirm?.action}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
