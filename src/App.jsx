@@ -96,6 +96,24 @@ const formatPeriodLabel = (dateStr, frequency) => {
     : d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 };
 
+// Count periods from start (or current month if no date) to end of current year
+const getYearPotentialCount = (startDate, frequency) => {
+  const now = new Date();
+  if (frequency === "yearly") return 1;
+  const yearEnd = new Date(now.getFullYear(), 11, 1); // December of current year
+  let from;
+  if (startDate) {
+    const s = new Date(startDate + "T00:00:00");
+    from = new Date(s.getFullYear(), s.getMonth(), 1);
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+    if (from < yearStart) from = yearStart; // cap to this year
+  } else {
+    from = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  if (from > yearEnd) return 0;
+  return (yearEnd.getFullYear() - from.getFullYear()) * 12 + yearEnd.getMonth() - from.getMonth() + 1;
+};
+
 const initialState = {
   projects: [], bankSpending: [], secretInvestmentSpending: [],
   partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [],
@@ -234,7 +252,10 @@ export default function App() {
         .reduce((a, rp) => a + rp.amount, 0);
 
       const totalPaid = contractPayments + projRecurringRevPaid;
-      const totalRevenue = p.totalValue + projRecurringRevTotal;
+      const totalRevenue = totalPaid; // cash received — what's actually been paid
+      // totalPotential: contract + each recurring stream projected to end of current year
+      const projRecurringYearPotential = projLinkedRev.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
+      const totalPotential = p.totalValue + projRecurringYearPotential;
       const totalExp = projectExpenses + projRecurringExpTotal;
       const profit = totalRevenue - totalExp;
       const contractUnpaid = p.totalValue - contractPayments;
@@ -245,7 +266,7 @@ export default function App() {
       const suhaibShare = profit > 0 ? profit * 0.10 : 0;
       const mohammedShare = profit > 0 ? profit * 0.10 : 0;
       const secretInvestmentShare = profit > 0 ? profit * 0.25 : 0;
-      return { ...p, contractPayments, totalPaid, totalRevenue, unpaid, contractUnpaid, recurringPending, totalExpenses: totalExp, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare };
+      return { ...p, contractPayments, totalPaid, totalRevenue, totalPotential, unpaid, contractUnpaid, recurringPending, totalExpenses: totalExp, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare };
     });
   }, [projects, recurringRevenue, recurringExpenses, recurringRevenuePayments]);
 
@@ -274,6 +295,9 @@ export default function App() {
   const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringMohammedShare;
   const globalRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0) + generalRecurringRev;
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0) + generalRecurringExp;
+  // Year-end potential: project contracts + all recurring projected to Dec 31
+  const globalPotential = projectStats.reduce((a, p) => a + p.totalPotential, 0)
+    + recurringRevenue.filter((r) => r.active && !r.projectId).reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
   const suhaibWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "suhaib");
   const mohammedWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "mohammed");
   const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
@@ -605,6 +629,21 @@ export default function App() {
     }
   };
 
+  const editRecurringRevenue = async (id, amount, frequency, description, startDate) => {
+    setLoading(true);
+    try {
+      const item = recurringRevenue.find((r) => r.id === id);
+      await dbUpdateRecurringRevenue(id, item.projectId, amount, frequency, description, item.active, startDate || null);
+      await refreshData();
+      toast.success("Recurring revenue updated");
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const addRecurringExpense = async (projectId, amount, frequency, description, startDate) => {
     setLoading(true);
     try {
@@ -642,6 +681,21 @@ export default function App() {
       await dbUpdateRecurringExpense(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
       await refreshData();
       toast.success(`Recurring expense ${!currentActive ? "activated" : "paused"}`);
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const editRecurringExpense = async (id, amount, frequency, description, startDate) => {
+    setLoading(true);
+    try {
+      const item = recurringExpenses.find((r) => r.id === id);
+      await dbUpdateRecurringExpense(id, item.projectId, amount, frequency, description, item.active, startDate || null);
+      await refreshData();
+      toast.success("Recurring expense updated");
+      setModal(null);
     } catch (error) {
       toast.error(`Failed to update: ${error.message}`);
     } finally {
@@ -882,7 +936,7 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`${projects.length} project${projects.length !== 1 ? "s" : ""}`} variant="income" />
+          <StatCard icon={DollarSign} label="Revenue Received" value={currency(globalRevenue)} sub={`Year potential: ${currency(globalPotential)}`} variant="income" />
           <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" />
           <StatCard icon={TrendingUp} label="Net Profit" value={currency(globalProfit)} variant={globalProfit >= 0 ? "income" : "expense"} />
           <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="bank" />
@@ -1012,8 +1066,8 @@ export default function App() {
                 )}
                 {(recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
                   <>
-                    <StatCard label="Recurring Revenue" value={currency(recurringRevenue.filter((r) => r.active).reduce((a, r) => a + r.amount, 0))} variant="income" sub={`${recurringRevenue.filter((r) => r.active).length} active`} onClick={() => setView("recurring")} />
-                    <StatCard label="Recurring Expenses" value={currency(recurringExpenses.filter((r) => r.active).reduce((a, r) => a + r.amount, 0))} variant="expense" sub={`${recurringExpenses.filter((r) => r.active).length} active`} onClick={() => setView("recurring")} />
+                    <StatCard label="Recurring Revenue" value={currency(recurringRevenue.filter((r) => r.active).reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0))} variant="income" sub={`${recurringRevenue.filter((r) => r.active).length} active · year potential`} onClick={() => setView("recurring")} />
+                    <StatCard label="Recurring Expenses" value={currency(recurringExpenses.filter((r) => r.active).reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0))} variant="expense" sub={`${recurringExpenses.filter((r) => r.active).length} active · year potential`} onClick={() => setView("recurring")} />
                   </>
                 )}
               </div>
@@ -1089,7 +1143,7 @@ export default function App() {
     const totExp = projectStats.reduce((a, p) => a + p.totalExpenses, 0);
     const totProfit = projectStats.reduce((a, p) => a + p.profit, 0);
     const totRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0);
-    const totPotential = projectStats.reduce((a, p) => a + p.totalValue, 0);
+    const totPotential = projectStats.reduce((a, p) => a + p.totalPotential, 0);
     const margin = totRevenue > 0 ? (totProfit / totRevenue) * 100 : 0;
     const marginColor = margin >= 50 ? "text-emerald-600" : margin >= 25 ? "text-amber-600" : "text-red-500";
     const marginBg = margin >= 50 ? "bg-emerald-50" : margin >= 25 ? "bg-amber-50" : "bg-red-50";
@@ -1139,7 +1193,7 @@ export default function App() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {projectStats.slice().reverse().map((p) => {
-              const paidPct = p.totalRevenue > 0 ? Math.min(100, (p.totalPaid / p.totalRevenue) * 100) : 0;
+              const paidPct = p.totalPotential > 0 ? Math.min(100, (p.totalPaid / p.totalPotential) * 100) : 0;
               return (
                 <Card key={p.id} className="cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => openProject(p.id)}>
                   <CardContent className="p-0">
@@ -1194,7 +1248,7 @@ export default function App() {
   function ProjectDetailView() {
     if (!selectedProject) return <EmptyState icon={FolderKanban} title="Project not found" description="The selected project could not be found." />;
     const p = selectedProject;
-    const paidPct = p.totalRevenue > 0 ? Math.min(100, (p.totalPaid / p.totalRevenue) * 100) : 0;
+    const paidPct = p.totalPotential > 0 ? Math.min(100, (p.totalPaid / p.totalPotential) * 100) : 0;
     const projLinkedRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id);
     const projLinkedExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id);
     return (
@@ -1218,9 +1272,9 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={CircleDollarSign} label="Total Revenue" value={currency(p.totalRevenue)} variant="highlight" sub={`Contract ${currency(p.totalValue)}`} />
-          <StatCard icon={ArrowUpRight} label="Received" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% of total revenue`} />
-          <StatCard icon={ArrowDownRight} label="Outstanding" value={currency(p.unpaid)} variant="expense" sub={p.recurringPending > 0 ? `${currency(p.recurringPending)} recurring pending` : `Contract only`} />
+          <StatCard icon={CircleDollarSign} label="Total Potential" value={currency(p.totalPotential)} variant="highlight" sub={`Contract ${currency(p.totalValue)}`} />
+          <StatCard icon={ArrowUpRight} label="Paid" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% of potential`} />
+          <StatCard icon={ArrowDownRight} label="Unpaid" value={currency(p.unpaid)} variant="expense" sub={p.recurringPending > 0 ? `${currency(p.recurringPending)} recurring pending` : undefined} />
           <StatCard icon={TrendingUp} label="Net Profit" value={currency(p.profit)} variant={p.profit >= 0 ? "income" : "expense"} />
         </div>
 
@@ -1329,49 +1383,67 @@ export default function App() {
           </CardContent>
         </Card>
 
-        {/* Recurring Revenue Installments */}
-        {projLinkedRev.length > 0 && (
-          <Card>
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-emerald-600" /> Recurring Revenue</CardTitle>
-                  <CardDescription>{projLinkedRev.length} stream{projLinkedRev.length !== 1 ? "s" : ""} · mark each period as received</CardDescription>
-                </div>
+        {/* Recurring Revenue */}
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-emerald-600" /> Recurring Revenue</CardTitle>
+                <CardDescription>{projLinkedRev.length > 0 ? `${projLinkedRev.length} stream${projLinkedRev.length !== 1 ? "s" : ""} · mark each period as received` : "Add recurring revenue streams for this project"}</CardDescription>
               </div>
-            </CardHeader>
-            <CardContent>
+              <Button size="sm" onClick={() => setModal({ title: "Add Recurring Revenue", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "startDate", label: "Start Date (optional)", type: "date" }], onSubmit: (v) => addRecurringRevenue(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {projLinkedRev.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No recurring revenue streams yet. Add one to track monthly or yearly income for this project.</p>
+            ) : (
               <div className="space-y-5">
                 {projLinkedRev.map((r) => {
                   const periods = generateRecurringPeriods(r.startDate, r.frequency);
                   const paidItems = recurringRevenuePayments.filter((rp) => rp.recurringRevenueId === r.id);
                   const paidAmount = paidItems.reduce((a, rp) => a + rp.amount, 0);
-                  const totalAmount = periods.length * r.amount;
-                  const paidCount = paidItems.length;
+                  const yearCount = getYearPotentialCount(r.startDate, r.frequency);
+                  const yearPotential = yearCount * r.amount;
                   return (
                     <div key={r.id} className="rounded-lg border overflow-hidden">
-                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b">
-                        <div>
-                          <p className="font-semibold text-sm">{r.description}</p>
-                          <p className="text-xs text-muted-foreground capitalize">{currency(r.amount)} / {r.frequency} · {periods.length} period{periods.length !== 1 ? "s" : ""} generated</p>
+                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-sm">{r.description}</p>
+                            {!r.startDate && <Badge className="bg-violet-100 text-violet-700 hover:bg-violet-100 text-[10px]">Potential</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground capitalize mt-0.5">
+                            {currency(r.amount)} / {r.frequency}
+                            {r.startDate ? ` · started ${formatDate(r.startDate)} · ${periods.length} period${periods.length !== 1 ? "s" : ""} to date` : " · start date not set"}
+                            {" · "}<span className="text-indigo-600 font-medium">{currency(yearPotential)} year potential</span>
+                          </p>
                         </div>
-                        <div className="text-right shrink-0">
-                          <p className="text-sm font-bold tabular-nums text-emerald-600">{currency(paidAmount)}</p>
-                          <p className="text-xs text-muted-foreground">{paidCount} of {periods.length} paid · {currency(totalAmount)} total</p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {r.startDate && <div className="text-right mr-2">
+                            <p className="text-sm font-bold tabular-nums text-emerald-600">{currency(paidAmount)}</p>
+                            <p className="text-xs text-muted-foreground">{paidItems.length}/{periods.length} paid</p>
+                          </div>}
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({ title: "Edit Recurring Revenue", fields: [{ name: "description", label: "Description", default: r.description, required: true }, { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true }, { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" }], onSubmit: (v) => editRecurringRevenue(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringRevenue(r.id, r.description)}>
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
                         </div>
                       </div>
-                      {periods.length === 0 ? (
-                        <p className="text-sm text-muted-foreground p-4">No periods generated yet.</p>
+                      {!r.startDate ? (
+                        <div className="px-4 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                          <span>Set a start date to begin tracking payments per period.</span>
+                          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setModal({ title: "Set Start Date", fields: [{ name: "startDate", label: "Start Date", type: "date", required: true }], onSubmit: (v) => editRecurringRevenue(r.id, r.amount, r.frequency, r.description, v.startDate) })}>
+                            Set Start Date
+                          </Button>
+                        </div>
                       ) : (
                         <Table>
-                          <TableHeader>
-                            <TableRow className="bg-muted/20">
-                              <TableHead>Period</TableHead>
-                              <TableHead>Amount</TableHead>
-                              <TableHead>Status</TableHead>
-                              <TableHead className="w-32 text-right">Action</TableHead>
-                            </TableRow>
-                          </TableHeader>
+                          <TableHeader><TableRow className="bg-muted/20"><TableHead>Period</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead className="w-32 text-right">Action</TableHead></TableRow></TableHeader>
                           <TableBody>
                             {[...periods].reverse().map((periodDate) => {
                               const payment = paidItems.find((rp) => rp.periodDate === periodDate);
@@ -1380,17 +1452,9 @@ export default function App() {
                                 <TableRow key={periodDate} className={cn(isPaid && "bg-emerald-50/30")}>
                                   <TableCell className="font-medium">{formatPeriodLabel(periodDate, r.frequency)}</TableCell>
                                   <TableCell className="tabular-nums text-muted-foreground">{currency(r.amount)}</TableCell>
-                                  <TableCell>
-                                    <Badge className={cn("font-medium", isPaid ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" : "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
-                                      {isPaid ? "Received" : "Pending"}
-                                    </Badge>
-                                  </TableCell>
+                                  <TableCell><Badge className={cn("font-medium", isPaid ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" : "bg-amber-100 text-amber-700 hover:bg-amber-100")}>{isPaid ? "Received" : "Pending"}</Badge></TableCell>
                                   <TableCell className="text-right">
-                                    <Button
-                                      variant="ghost" size="sm"
-                                      className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50")}
-                                      onClick={() => toggleRecurringRevPayment(r, periodDate, payment)}
-                                    >
+                                    <Button variant="ghost" size="sm" className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50")} onClick={() => toggleRecurringRevPayment(r, periodDate, payment)}>
                                       {isPaid ? <><X className="h-3 w-3" />Unmark</> : <><CheckCircle2 className="h-3 w-3" />Mark Paid</>}
                                     </Button>
                                   </TableCell>
@@ -1404,51 +1468,71 @@ export default function App() {
                   );
                 })}
               </div>
-            </CardContent>
-          </Card>
-        )}
+            )}
+          </CardContent>
+        </Card>
 
-        {/* Recurring Expense Installments */}
-        {projLinkedExp.length > 0 && (
-          <Card>
-            <CardHeader className="pb-4">
+        {/* Recurring Expenses */}
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
               <div>
                 <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-orange-500" /> Recurring Expenses</CardTitle>
-                <CardDescription>{projLinkedExp.length} stream{projLinkedExp.length !== 1 ? "s" : ""} · track which periods have been paid out</CardDescription>
+                <CardDescription>{projLinkedExp.length > 0 ? `${projLinkedExp.length} stream${projLinkedExp.length !== 1 ? "s" : ""} · track which periods have been paid out` : "Add recurring expense streams for this project"}</CardDescription>
               </div>
-            </CardHeader>
-            <CardContent>
+              <Button size="sm" variant="outline" onClick={() => setModal({ title: "Add Recurring Expense", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly hosting", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "startDate", label: "Start Date (optional)", type: "date" }], onSubmit: (v) => addRecurringExpense(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {projLinkedExp.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No recurring expenses yet. Add one to track monthly or yearly costs for this project.</p>
+            ) : (
               <div className="space-y-5">
                 {projLinkedExp.map((r) => {
                   const periods = generateRecurringPeriods(r.startDate, r.frequency);
                   const paidItems = recurringExpensePayments.filter((ep) => ep.recurringExpenseId === r.id);
                   const paidAmount = paidItems.reduce((a, ep) => a + ep.amount, 0);
-                  const totalAmount = periods.length * r.amount;
-                  const paidCount = paidItems.length;
+                  const yearCount = getYearPotentialCount(r.startDate, r.frequency);
+                  const yearCost = yearCount * r.amount;
                   return (
                     <div key={r.id} className="rounded-lg border overflow-hidden">
-                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b">
-                        <div>
-                          <p className="font-semibold text-sm">{r.description}</p>
-                          <p className="text-xs text-muted-foreground capitalize">{currency(r.amount)} / {r.frequency} · {periods.length} period{periods.length !== 1 ? "s" : ""} generated</p>
+                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-sm">{r.description}</p>
+                            {!r.startDate && <Badge className="bg-violet-100 text-violet-700 hover:bg-violet-100 text-[10px]">Potential</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground capitalize mt-0.5">
+                            {currency(r.amount)} / {r.frequency}
+                            {r.startDate ? ` · started ${formatDate(r.startDate)} · ${periods.length} period${periods.length !== 1 ? "s" : ""} to date` : " · start date not set"}
+                            {" · "}<span className="text-orange-600 font-medium">{currency(yearCost)} year cost</span>
+                          </p>
                         </div>
-                        <div className="text-right shrink-0">
-                          <p className="text-sm font-bold tabular-nums text-orange-500">{currency(paidAmount)}</p>
-                          <p className="text-xs text-muted-foreground">{paidCount} of {periods.length} paid · {currency(totalAmount)} total</p>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {r.startDate && <div className="text-right mr-2">
+                            <p className="text-sm font-bold tabular-nums text-orange-500">{currency(paidAmount)}</p>
+                            <p className="text-xs text-muted-foreground">{paidItems.length}/{periods.length} paid</p>
+                          </div>}
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({ title: "Edit Recurring Expense", fields: [{ name: "description", label: "Description", default: r.description, required: true }, { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true }, { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" }], onSubmit: (v) => editRecurringExpense(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringExpense(r.id, r.description)}>
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
                         </div>
                       </div>
-                      {periods.length === 0 ? (
-                        <p className="text-sm text-muted-foreground p-4">No periods generated yet.</p>
+                      {!r.startDate ? (
+                        <div className="px-4 py-3 text-sm text-muted-foreground flex items-center justify-between">
+                          <span>Set a start date to begin tracking payments per period.</span>
+                          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setModal({ title: "Set Start Date", fields: [{ name: "startDate", label: "Start Date", type: "date", required: true }], onSubmit: (v) => editRecurringExpense(r.id, r.amount, r.frequency, r.description, v.startDate) })}>
+                            Set Start Date
+                          </Button>
+                        </div>
                       ) : (
                         <Table>
-                          <TableHeader>
-                            <TableRow className="bg-muted/20">
-                              <TableHead>Period</TableHead>
-                              <TableHead>Amount</TableHead>
-                              <TableHead>Status</TableHead>
-                              <TableHead className="w-32 text-right">Action</TableHead>
-                            </TableRow>
-                          </TableHeader>
+                          <TableHeader><TableRow className="bg-muted/20"><TableHead>Period</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead className="w-32 text-right">Action</TableHead></TableRow></TableHeader>
                           <TableBody>
                             {[...periods].reverse().map((periodDate) => {
                               const payment = paidItems.find((ep) => ep.periodDate === periodDate);
@@ -1457,17 +1541,9 @@ export default function App() {
                                 <TableRow key={periodDate} className={cn(isPaid && "bg-orange-50/30")}>
                                   <TableCell className="font-medium">{formatPeriodLabel(periodDate, r.frequency)}</TableCell>
                                   <TableCell className="tabular-nums text-muted-foreground">{currency(r.amount)}</TableCell>
-                                  <TableCell>
-                                    <Badge className={cn("font-medium", isPaid ? "bg-orange-100 text-orange-700 hover:bg-orange-100" : "bg-muted text-muted-foreground")}>
-                                      {isPaid ? "Paid Out" : "Unpaid"}
-                                    </Badge>
-                                  </TableCell>
+                                  <TableCell><Badge className={cn("font-medium", isPaid ? "bg-orange-100 text-orange-700 hover:bg-orange-100" : "bg-muted text-muted-foreground")}>{isPaid ? "Paid Out" : "Unpaid"}</Badge></TableCell>
                                   <TableCell className="text-right">
-                                    <Button
-                                      variant="ghost" size="sm"
-                                      className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-orange-600 hover:text-orange-700 hover:bg-orange-50")}
-                                      onClick={() => toggleRecurringExpPayment(r, periodDate, payment)}
-                                    >
+                                    <Button variant="ghost" size="sm" className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-orange-600 hover:text-orange-700 hover:bg-orange-50")} onClick={() => toggleRecurringExpPayment(r, periodDate, payment)}>
                                       {isPaid ? <><X className="h-3 w-3" />Unmark</> : <><CheckCircle2 className="h-3 w-3" />Mark Paid</>}
                                     </Button>
                                   </TableCell>
@@ -1481,9 +1557,9 @@ export default function App() {
                   );
                 })}
               </div>
-            </CardContent>
-          </Card>
-        )}
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }

@@ -78,9 +78,10 @@ All tables have:
 ### Profit Calculation
 - **contractPayments** = sum of payment records for the project
 - **totalPaid** = contractPayments + sum of paid recurring revenue installments (from recurring_revenue_payments)
-- **totalRevenue** = totalValue + projRecurringRevTotal (all generated recurring periods × amount, accrual basis)
-- **totalExpenses** = project expenses + all generated recurring expense periods (accrual, regardless of paid status)
-- **Profit** = totalRevenue - totalExpenses
+- **totalRevenue** = totalPaid (cash received — contract payments + paid recurring installments)
+- **totalPotential** = totalValue + projRecurringRevTotal (full potential if all periods paid; used for progress bars)
+- **totalExpenses** = project expenses + all generated recurring expense periods (all periods always count as costs)
+- **Profit** = totalRevenue - totalExpenses (cash-basis: received revenue minus all costs)
 - **Profit Split**: If profit > 0: Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%
 - **unpaid** = contractUnpaid + recurringPending (combined outstanding from contract + pending recurring installments)
 

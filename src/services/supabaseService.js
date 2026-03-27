@@ -396,8 +396,8 @@ export async function addRecurringRevenue(projectId, amount, frequency, descript
         amount,
         frequency,
         description,
-        start_date: startDate,
-        next_due: startDate,
+        start_date: startDate || null,
+        next_due: startDate || null,
       },
     ])
     .select();
@@ -406,18 +406,10 @@ export async function addRecurringRevenue(projectId, amount, frequency, descript
   return data[0];
 }
 
-export async function updateRecurringRevenue(id, projectId, amount, frequency, description, active) {
-  const { error } = await supabase
-    .from("recurring_revenue")
-    .update({
-      project_id: projectId || null,
-      amount,
-      frequency,
-      description,
-      active,
-    })
-    .eq("id", id);
-
+export async function updateRecurringRevenue(id, projectId, amount, frequency, description, active, startDate) {
+  const update = { project_id: projectId || null, amount, frequency, description, active };
+  if (startDate !== undefined) { update.start_date = startDate || null; update.next_due = startDate || null; }
+  const { error } = await supabase.from("recurring_revenue").update(update).eq("id", id);
   if (error) throw error;
 }
 
@@ -438,8 +430,8 @@ export async function addRecurringExpense(projectId, amount, frequency, descript
         amount,
         frequency,
         description,
-        start_date: startDate,
-        next_due: startDate,
+        start_date: startDate || null,
+        next_due: startDate || null,
       },
     ])
     .select();
@@ -448,18 +440,10 @@ export async function addRecurringExpense(projectId, amount, frequency, descript
   return data[0];
 }
 
-export async function updateRecurringExpense(id, projectId, amount, frequency, description, active) {
-  const { error } = await supabase
-    .from("recurring_expenses")
-    .update({
-      project_id: projectId || null,
-      amount,
-      frequency,
-      description,
-      active,
-    })
-    .eq("id", id);
-
+export async function updateRecurringExpense(id, projectId, amount, frequency, description, active, startDate) {
+  const update = { project_id: projectId || null, amount, frequency, description, active };
+  if (startDate !== undefined) { update.start_date = startDate || null; update.next_due = startDate || null; }
+  const { error } = await supabase.from("recurring_expenses").update(update).eq("id", id);
   if (error) throw error;
 }
 
