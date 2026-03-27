@@ -27,6 +27,10 @@ import {
   addRecurringExpense as dbAddRecurringExpense,
   updateRecurringExpense as dbUpdateRecurringExpense,
   deleteRecurringExpense as dbDeleteRecurringExpense,
+  addRecurringRevenuePayment as dbAddRecurringRevenuePayment,
+  deleteRecurringRevenuePayment as dbDeleteRecurringRevenuePayment,
+  addRecurringExpensePayment as dbAddRecurringExpensePayment,
+  deleteRecurringExpensePayment as dbDeleteRecurringExpensePayment,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -46,7 +50,7 @@ import {
   LayoutDashboard, FolderKanban, Landmark, PiggyBank, Repeat, FileBarChart,
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2, Pencil, Eye, ArrowLeft,
   Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
-  ArrowDownRight, Target, Loader2, AlertTriangle,
+  ArrowDownRight, Target, Loader2, AlertTriangle, Percent, CheckCircle2, X,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -61,9 +65,41 @@ const formatDate = (d) => {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
+// Generate all period dates from startDate up to current period (YYYY-MM-01 format)
+const generateRecurringPeriods = (startDate, frequency) => {
+  if (!startDate) return [];
+  const periods = [];
+  const start = new Date(startDate + "T00:00:00");
+  const now = new Date();
+  let current = new Date(start.getFullYear(), start.getMonth(), 1);
+  const limit = new Date(now.getFullYear(), now.getMonth(), 1);
+  while (current <= limit) {
+    periods.push(
+      current.getFullYear() +
+        "-" +
+        String(current.getMonth() + 1).padStart(2, "0") +
+        "-01"
+    );
+    if (frequency === "yearly") {
+      current = new Date(current.getFullYear() + 1, current.getMonth(), 1);
+    } else {
+      current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+    }
+  }
+  return periods;
+};
+
+const formatPeriodLabel = (dateStr, frequency) => {
+  const d = new Date(dateStr + "T00:00:00");
+  return frequency === "yearly"
+    ? d.toLocaleDateString("en-US", { year: "numeric" })
+    : d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+};
+
 const initialState = {
   projects: [], bankSpending: [], secretInvestmentSpending: [],
   partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [],
+  recurringRevenuePayments: [], recurringExpensePayments: [],
 };
 
 // --- Stat Card Component ---
@@ -176,44 +212,66 @@ export default function App() {
     setConfirm({ title, message, action, onConfirm, isDangerous });
   };
 
-  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, budgets, recurringRevenue, recurringExpenses } = state;
+  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments } = state;
 
   // --- Computed Values ---
   const projectStats = useMemo(() => {
     return projects.map((p) => {
-      const totalPaid = (p.payments || []).reduce((a, x) => a + x.amount, 0);
-      const unpaid = p.totalValue - totalPaid;
-      const totalExpenses = (p.expenses || []).reduce((a, x) => a + x.amount, 0);
-      const projRecurringRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id).reduce((a, r) => a + r.amount, 0);
-      const projRecurringExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id).reduce((a, r) => a + r.amount, 0);
-      const totalRevenue = totalPaid + projRecurringRev;
-      const totalExp = totalExpenses + projRecurringExp;
+      const contractPayments = (p.payments || []).reduce((a, x) => a + x.amount, 0);
+      const projectExpenses = (p.expenses || []).reduce((a, x) => a + x.amount, 0);
+
+      // Project-linked recurring items
+      const projLinkedRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id);
+      const projLinkedExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id);
+
+      // All generated periods × amount (accrual basis)
+      const projRecurringRevTotal = projLinkedRev.reduce((a, r) => a + generateRecurringPeriods(r.startDate, r.frequency).length * r.amount, 0);
+      const projRecurringExpTotal = projLinkedExp.reduce((a, r) => a + generateRecurringPeriods(r.startDate, r.frequency).length * r.amount, 0);
+
+      // Cash received from paid recurring revenue installments
+      const projRecurringRevPaid = recurringRevenuePayments
+        .filter((rp) => projLinkedRev.some((r) => r.id === rp.recurringRevenueId))
+        .reduce((a, rp) => a + rp.amount, 0);
+
+      const totalPaid = contractPayments + projRecurringRevPaid;
+      const totalRevenue = p.totalValue + projRecurringRevTotal;
+      const totalExp = projectExpenses + projRecurringExpTotal;
       const profit = totalRevenue - totalExp;
-      const share = profit > 0 ? profit * 0.25 : 0;
-      return { ...p, totalPaid, totalRevenue, unpaid, totalExpenses: totalExp, profit, bankShare: share, suhaibShare: share, mohammedShare: share, secretInvestmentShare: share };
+      const contractUnpaid = p.totalValue - contractPayments;
+      const recurringPending = projRecurringRevTotal - projRecurringRevPaid;
+      const unpaid = contractUnpaid + recurringPending;
+
+      const bankShare = profit > 0 ? profit * 0.55 : 0;
+      const suhaibShare = profit > 0 ? profit * 0.10 : 0;
+      const mohammedShare = profit > 0 ? profit * 0.10 : 0;
+      const secretInvestmentShare = profit > 0 ? profit * 0.25 : 0;
+      return { ...p, contractPayments, totalPaid, totalRevenue, unpaid, contractUnpaid, recurringPending, totalExpenses: totalExp, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare };
     });
-  }, [projects, recurringRevenue, recurringExpenses]);
+  }, [projects, recurringRevenue, recurringExpenses, recurringRevenuePayments]);
 
   const generalRecurringRev = recurringRevenue.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
   const generalRecurringExp = recurringExpenses.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
   const generalRecurringProfit = generalRecurringRev - generalRecurringExp;
-  const generalRecurringShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0;
+  const generalRecurringBankShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.55 : 0;
+  const generalRecurringSuhaibShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.10 : 0;
+  const generalRecurringMohammedShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.10 : 0;
+  const generalRecurringSecretShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0;
 
   const globalBank = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.bankShare, 0) + generalRecurringShare;
+    const income = projectStats.reduce((a, p) => a + p.bankShare, 0) + generalRecurringBankShare;
     const spent = bankSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, bankSpending, generalRecurringShare]);
+  }, [projectStats, bankSpending, generalRecurringBankShare]);
 
   const globalSecretInvestment = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0) + generalRecurringShare;
+    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0) + generalRecurringSecretShare;
     const spent = secretInvestmentSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, secretInvestmentSpending, generalRecurringShare]);
+  }, [projectStats, secretInvestmentSpending, generalRecurringSecretShare]);
 
   const globalProfit = projectStats.reduce((a, p) => a + p.profit, 0) + generalRecurringProfit;
-  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0) + generalRecurringShare;
-  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringShare;
+  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0) + generalRecurringSuhaibShare;
+  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringMohammedShare;
   const globalRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0) + generalRecurringRev;
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0) + generalRecurringExp;
   const suhaibWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "suhaib");
@@ -591,6 +649,42 @@ export default function App() {
     }
   };
 
+  const toggleRecurringRevPayment = async (recurringItem, periodDate, existingPayment) => {
+    setLoading(true);
+    try {
+      if (existingPayment) {
+        await dbDeleteRecurringRevenuePayment(existingPayment.id);
+        toast.success(`${formatPeriodLabel(periodDate, recurringItem.frequency)} marked as unpaid`);
+      } else {
+        await dbAddRecurringRevenuePayment(recurringItem.id, recurringItem.projectId, periodDate, recurringItem.amount);
+        toast.success(`${formatPeriodLabel(periodDate, recurringItem.frequency)} marked as paid`);
+      }
+      await refreshData();
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleRecurringExpPayment = async (recurringItem, periodDate, existingPayment) => {
+    setLoading(true);
+    try {
+      if (existingPayment) {
+        await dbDeleteRecurringExpensePayment(existingPayment.id);
+        toast.success(`${formatPeriodLabel(periodDate, recurringItem.frequency)} marked as unpaid`);
+      } else {
+        await dbAddRecurringExpensePayment(recurringItem.id, recurringItem.projectId, periodDate, recurringItem.amount);
+        toast.success(`${formatPeriodLabel(periodDate, recurringItem.frequency)} marked as paid`);
+      }
+      await refreshData();
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openProject = (id) => { setSelectedProjectId(id); setView("project"); };
 
   // --- Modal Form with Validation ---
@@ -798,7 +892,7 @@ export default function App() {
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="text-base">Profit Distribution</CardTitle>
-              <CardDescription>Automatically split 25% each across all projects</CardDescription>
+              <CardDescription>Split per project: Bank 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -990,6 +1084,24 @@ export default function App() {
 
   // --- Projects List ---
   function ProjectsView() {
+    const totPaid = projectStats.reduce((a, p) => a + p.totalPaid, 0);
+    const totUnpaid = projectStats.reduce((a, p) => a + p.unpaid, 0);
+    const totExp = projectStats.reduce((a, p) => a + p.totalExpenses, 0);
+    const totProfit = projectStats.reduce((a, p) => a + p.profit, 0);
+    const totRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0);
+    const totPotential = projectStats.reduce((a, p) => a + p.totalValue, 0);
+    const margin = totRevenue > 0 ? (totProfit / totRevenue) * 100 : 0;
+    const marginColor = margin >= 50 ? "text-emerald-600" : margin >= 25 ? "text-amber-600" : "text-red-500";
+    const marginBg = margin >= 50 ? "bg-emerald-50" : margin >= 25 ? "bg-amber-50" : "bg-red-50";
+    const summaryStats = [
+      { label: "Total Paid", value: currency(totPaid), icon: ArrowUpRight, color: "text-emerald-600", bg: "bg-emerald-50" },
+      { label: "Total Unpaid", value: currency(totUnpaid), icon: ArrowDownRight, color: "text-red-500", bg: "bg-red-50" },
+      { label: "Total Expenses", value: currency(totExp), icon: TrendingDown, color: "text-orange-500", bg: "bg-orange-50" },
+      { label: "Total Profit", value: currency(totProfit), icon: TrendingUp, color: totProfit >= 0 ? "text-emerald-600" : "text-red-500", bg: totProfit >= 0 ? "bg-emerald-50" : "bg-red-50" },
+      { label: "Margin", value: `${margin.toFixed(1)}%`, icon: Percent, color: marginColor, bg: marginBg },
+      { label: "Total Potential", value: currency(totPotential), icon: CircleDollarSign, color: "text-indigo-600", bg: "bg-indigo-50" },
+    ];
+
     return (
       <div className="animate-fade-in-up space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -1002,6 +1114,24 @@ export default function App() {
           </Button>
         </div>
 
+        {projectStats.length > 0 && (
+          <Card className="overflow-hidden">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-border">
+              {summaryStats.map((s) => (
+                <div key={s.label} className="bg-card p-4 flex items-center gap-3">
+                  <div className={cn("rounded-lg p-2 shrink-0", s.bg)}>
+                    <s.icon className={cn("h-4 w-4", s.color)} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground leading-tight mb-0.5">{s.label}</p>
+                    <p className={cn("text-sm font-bold tabular-nums truncate", s.color)}>{s.value}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
         {projectStats.length === 0 ? (
           <Card><CardContent className="p-0">
             <EmptyState icon={FolderKanban} title="No projects yet" description='Click "New Project" above to create your first one.' />
@@ -1009,7 +1139,7 @@ export default function App() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {projectStats.slice().reverse().map((p) => {
-              const paidPct = p.totalValue > 0 ? Math.min(100, (p.totalPaid / p.totalValue) * 100) : 0;
+              const paidPct = p.totalRevenue > 0 ? Math.min(100, (p.totalPaid / p.totalRevenue) * 100) : 0;
               return (
                 <Card key={p.id} className="cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => openProject(p.id)}>
                   <CardContent className="p-0">
@@ -1064,7 +1194,9 @@ export default function App() {
   function ProjectDetailView() {
     if (!selectedProject) return <EmptyState icon={FolderKanban} title="Project not found" description="The selected project could not be found." />;
     const p = selectedProject;
-    const paidPct = p.totalValue > 0 ? Math.min(100, (p.totalPaid / p.totalValue) * 100) : 0;
+    const paidPct = p.totalRevenue > 0 ? Math.min(100, (p.totalPaid / p.totalRevenue) * 100) : 0;
+    const projLinkedRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id);
+    const projLinkedExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id);
     return (
       <div className="animate-fade-in-up space-y-6">
         <Button variant="ghost" size="sm" onClick={() => setView("projects")} className="mb-2">
@@ -1073,7 +1205,7 @@ export default function App() {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{p.name}</h1>
-            <p className="text-sm text-muted-foreground">Project value: {currency(p.totalValue)}</p>
+            <p className="text-sm text-muted-foreground">Contract: {currency(p.totalValue)}{projLinkedRev.length > 0 ? ` · ${projLinkedRev.length} recurring stream${projLinkedRev.length !== 1 ? "s" : ""}` : ""}</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setModal({ title: "Edit Project", fields: [{ name: "name", label: "Project Name", default: p.name, required: true }, { name: "totalValue", label: "Total Value (BHD)", type: "number", default: String(p.totalValue), required: true }], onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)) })}>
@@ -1086,9 +1218,9 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={CircleDollarSign} label="Total Value" value={currency(p.totalValue)} variant="highlight" />
-          <StatCard icon={ArrowUpRight} label="Paid" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% complete`} />
-          <StatCard icon={ArrowDownRight} label="Unpaid" value={currency(p.unpaid)} variant="expense" />
+          <StatCard icon={CircleDollarSign} label="Total Revenue" value={currency(p.totalRevenue)} variant="highlight" sub={`Contract ${currency(p.totalValue)}`} />
+          <StatCard icon={ArrowUpRight} label="Received" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% of total revenue`} />
+          <StatCard icon={ArrowDownRight} label="Outstanding" value={currency(p.unpaid)} variant="expense" sub={p.recurringPending > 0 ? `${currency(p.recurringPending)} recurring pending` : `Contract only`} />
           <StatCard icon={TrendingUp} label="Net Profit" value={currency(p.profit)} variant={p.profit >= 0 ? "income" : "expense"} />
         </div>
 
@@ -1096,7 +1228,7 @@ export default function App() {
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="text-base">Profit Split</CardTitle>
-              <CardDescription>25% allocation per category</CardDescription>
+              <CardDescription>Bank 55% · Suhaib 10% · Mohammed 10% · Secret Investment 25%</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1196,6 +1328,162 @@ export default function App() {
             )}
           </CardContent>
         </Card>
+
+        {/* Recurring Revenue Installments */}
+        {projLinkedRev.length > 0 && (
+          <Card>
+            <CardHeader className="pb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-emerald-600" /> Recurring Revenue</CardTitle>
+                  <CardDescription>{projLinkedRev.length} stream{projLinkedRev.length !== 1 ? "s" : ""} · mark each period as received</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-5">
+                {projLinkedRev.map((r) => {
+                  const periods = generateRecurringPeriods(r.startDate, r.frequency);
+                  const paidItems = recurringRevenuePayments.filter((rp) => rp.recurringRevenueId === r.id);
+                  const paidAmount = paidItems.reduce((a, rp) => a + rp.amount, 0);
+                  const totalAmount = periods.length * r.amount;
+                  const paidCount = paidItems.length;
+                  return (
+                    <div key={r.id} className="rounded-lg border overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b">
+                        <div>
+                          <p className="font-semibold text-sm">{r.description}</p>
+                          <p className="text-xs text-muted-foreground capitalize">{currency(r.amount)} / {r.frequency} · {periods.length} period{periods.length !== 1 ? "s" : ""} generated</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-bold tabular-nums text-emerald-600">{currency(paidAmount)}</p>
+                          <p className="text-xs text-muted-foreground">{paidCount} of {periods.length} paid · {currency(totalAmount)} total</p>
+                        </div>
+                      </div>
+                      {periods.length === 0 ? (
+                        <p className="text-sm text-muted-foreground p-4">No periods generated yet.</p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-muted/20">
+                              <TableHead>Period</TableHead>
+                              <TableHead>Amount</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead className="w-32 text-right">Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {[...periods].reverse().map((periodDate) => {
+                              const payment = paidItems.find((rp) => rp.periodDate === periodDate);
+                              const isPaid = !!payment;
+                              return (
+                                <TableRow key={periodDate} className={cn(isPaid && "bg-emerald-50/30")}>
+                                  <TableCell className="font-medium">{formatPeriodLabel(periodDate, r.frequency)}</TableCell>
+                                  <TableCell className="tabular-nums text-muted-foreground">{currency(r.amount)}</TableCell>
+                                  <TableCell>
+                                    <Badge className={cn("font-medium", isPaid ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" : "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                                      {isPaid ? "Received" : "Pending"}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      variant="ghost" size="sm"
+                                      className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50")}
+                                      onClick={() => toggleRecurringRevPayment(r, periodDate, payment)}
+                                    >
+                                      {isPaid ? <><X className="h-3 w-3" />Unmark</> : <><CheckCircle2 className="h-3 w-3" />Mark Paid</>}
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Recurring Expense Installments */}
+        {projLinkedExp.length > 0 && (
+          <Card>
+            <CardHeader className="pb-4">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-orange-500" /> Recurring Expenses</CardTitle>
+                <CardDescription>{projLinkedExp.length} stream{projLinkedExp.length !== 1 ? "s" : ""} · track which periods have been paid out</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-5">
+                {projLinkedExp.map((r) => {
+                  const periods = generateRecurringPeriods(r.startDate, r.frequency);
+                  const paidItems = recurringExpensePayments.filter((ep) => ep.recurringExpenseId === r.id);
+                  const paidAmount = paidItems.reduce((a, ep) => a + ep.amount, 0);
+                  const totalAmount = periods.length * r.amount;
+                  const paidCount = paidItems.length;
+                  return (
+                    <div key={r.id} className="rounded-lg border overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 bg-muted/40 border-b">
+                        <div>
+                          <p className="font-semibold text-sm">{r.description}</p>
+                          <p className="text-xs text-muted-foreground capitalize">{currency(r.amount)} / {r.frequency} · {periods.length} period{periods.length !== 1 ? "s" : ""} generated</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-bold tabular-nums text-orange-500">{currency(paidAmount)}</p>
+                          <p className="text-xs text-muted-foreground">{paidCount} of {periods.length} paid · {currency(totalAmount)} total</p>
+                        </div>
+                      </div>
+                      {periods.length === 0 ? (
+                        <p className="text-sm text-muted-foreground p-4">No periods generated yet.</p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-muted/20">
+                              <TableHead>Period</TableHead>
+                              <TableHead>Amount</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead className="w-32 text-right">Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {[...periods].reverse().map((periodDate) => {
+                              const payment = paidItems.find((ep) => ep.periodDate === periodDate);
+                              const isPaid = !!payment;
+                              return (
+                                <TableRow key={periodDate} className={cn(isPaid && "bg-orange-50/30")}>
+                                  <TableCell className="font-medium">{formatPeriodLabel(periodDate, r.frequency)}</TableCell>
+                                  <TableCell className="tabular-nums text-muted-foreground">{currency(r.amount)}</TableCell>
+                                  <TableCell>
+                                    <Badge className={cn("font-medium", isPaid ? "bg-orange-100 text-orange-700 hover:bg-orange-100" : "bg-muted text-muted-foreground")}>
+                                      {isPaid ? "Paid Out" : "Unpaid"}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      variant="ghost" size="sm"
+                                      className={cn("h-7 text-xs gap-1", isPaid ? "text-muted-foreground hover:text-red-600" : "text-orange-600 hover:text-orange-700 hover:bg-orange-50")}
+                                      onClick={() => toggleRecurringExpPayment(r, periodDate, payment)}
+                                    >
+                                      {isPaid ? <><X className="h-3 w-3" />Unmark</> : <><CheckCircle2 className="h-3 w-3" />Mark Paid</>}
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
@@ -1204,11 +1492,11 @@ export default function App() {
   function BankView() {
     return (
       <div className="animate-fade-in-up space-y-6">
-        <div><h1 className="text-2xl font-bold tracking-tight">Bank Savings</h1><p className="text-sm text-muted-foreground">25% of all project profits go to bank savings</p></div>
+        <div><h1 className="text-2xl font-bold tracking-tight">Bank Savings</h1><p className="text-sm text-muted-foreground">55% of all project profits go to bank savings</p></div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="highlight" />
-          <StatCard icon={ArrowUpRight} label="Bank Share (25%)" value={currency(globalBank.income)} variant="income" sub="From project profits" />
+          <StatCard icon={ArrowUpRight} label="Bank Share (55%)" value={currency(globalBank.income)} variant="income" sub="From project profits" />
           <StatCard icon={ArrowDownRight} label="Bank Spent" value={currency(globalBank.spent)} variant="expense" sub={`${bankSpending.length} transaction${bankSpending.length !== 1 ? "s" : ""}`} />
           <StatCard icon={Wallet} label="Bank Available" value={currency(bankSpendable)} variant="bank" sub="Share minus spending" />
         </div>

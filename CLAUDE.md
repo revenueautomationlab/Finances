@@ -1,7 +1,7 @@
 # RAL Finance - Project Guide
 
 ## Overview
-Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects, payments, expenses, and splits profit 4 ways (25% each: Bank Savings, Suhaib, Mohammed, Secret Investment). Includes budgets, recurring items, partner withdrawals, and comprehensive reports.
+Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects, payments, expenses, and splits profit 4 ways (Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%). Includes budgets, recurring items, partner withdrawals, and comprehensive reports.
 
 ## Tech Stack
 - **Frontend**: React 18 + Vite 4 (vanilla JSX, no TypeScript)
@@ -57,6 +57,8 @@ Tables:
 - `budget_spending` — spending against budgets (FK to budgets, CASCADE delete)
 - `recurring_revenue` — recurring revenue items (nullable project_id, frequency: monthly/yearly, active boolean)
 - `recurring_expenses` — recurring expense items (nullable project_id, frequency: monthly/yearly, active boolean)
+- `recurring_revenue_payments` — paid period records for project-linked recurring revenue (FK to recurring_revenue + projects, UNIQUE on recurring_revenue_id+period_date)
+- `recurring_expense_payments` — paid period records for project-linked recurring expenses (FK to recurring_expenses + projects, UNIQUE on recurring_expense_id+period_date)
 
 All tables have:
 - RLS enabled (authenticated users only)
@@ -74,14 +76,18 @@ All tables have:
 ## Business Logic
 
 ### Profit Calculation
-- **totalPaid** = sum of actual payments (used for "Paid" column display)
-- **totalRevenue** = totalPaid + active project-linked recurring revenue (used for profit calculations)
-- **Profit** = totalRevenue - totalExpenses (per project, where totalExpenses includes project-linked recurring expenses)
-- **Profit Split**: If profit > 0, 25% each to: Bank Savings, Suhaib, Mohammed, Secret Investment
+- **contractPayments** = sum of payment records for the project
+- **totalPaid** = contractPayments + sum of paid recurring revenue installments (from recurring_revenue_payments)
+- **totalRevenue** = totalValue + projRecurringRevTotal (all generated recurring periods × amount, accrual basis)
+- **totalExpenses** = project expenses + all generated recurring expense periods (accrual, regardless of paid status)
+- **Profit** = totalRevenue - totalExpenses
+- **Profit Split**: If profit > 0: Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%
+- **unpaid** = contractUnpaid + recurringPending (combined outstanding from contract + pending recurring installments)
 
 ### Recurring Items Integration
-- **Project-linked recurring**: Active recurring items with a `project_id` add to that project's revenue/expenses and flow through the normal profit split
-- **General recurring** (no project): Creates its own profit split via `generalRecurringShare`
+- **Project-linked recurring**: Uses period tracking. `generateRecurringPeriods(startDate, frequency)` generates all periods from start_date to current month/year. Revenue periods can be marked paid/unpaid in the project detail view. Expense periods track payment status but ALL periods always count toward totalExpenses.
+- **Paid period storage**: A record in `recurring_revenue_payments` or `recurring_expense_payments` = paid. No record = unpaid. Marking paid = INSERT; marking unpaid = DELETE.
+- **General recurring** (no project): Uses single-amount logic (not period-tracked). Creates its own profit split via `generalRecurring*Share` variables.
 - `generalRecurringRev` = sum of active recurring revenue without project_id
 - `generalRecurringExp` = sum of active recurring expenses without project_id
 - `generalRecurringProfit` = generalRecurringRev - generalRecurringExp

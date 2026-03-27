@@ -30,6 +30,8 @@ export async function fetchState() {
       { data: budgets },
       { data: recurringRevenue },
       { data: recurringExpenses },
+      { data: recurringRevenuePayments },
+      { data: recurringExpensePayments },
     ] = await Promise.all([
       supabase.from("projects").select("*, payments(*), expenses(*)"),
       supabase.from("bank_spending").select("*"),
@@ -38,6 +40,8 @@ export async function fetchState() {
       supabase.from("budgets").select("*, budget_spending(*)"),
       supabase.from("recurring_revenue").select("*"),
       supabase.from("recurring_expenses").select("*"),
+      supabase.from("recurring_revenue_payments").select("*"),
+      supabase.from("recurring_expense_payments").select("*"),
     ]);
 
     // Transform database format to application format
@@ -115,6 +119,24 @@ export async function fetchState() {
         nextDue: r.next_due,
         active: r.active,
         createdAt: r.created_at,
+      })),
+      recurringRevenuePayments: (recurringRevenuePayments || []).map((rp) => ({
+        id: rp.id,
+        recurringRevenueId: rp.recurring_revenue_id,
+        projectId: rp.project_id,
+        periodDate: rp.period_date,
+        amount: parseFloat(rp.amount),
+        note: rp.note,
+        createdAt: rp.created_at,
+      })),
+      recurringExpensePayments: (recurringExpensePayments || []).map((ep) => ({
+        id: ep.id,
+        recurringExpenseId: ep.recurring_expense_id,
+        projectId: ep.project_id,
+        periodDate: ep.period_date,
+        amount: parseFloat(ep.amount),
+        note: ep.note,
+        createdAt: ep.created_at,
       })),
     };
   } catch (error) {
@@ -444,6 +466,36 @@ export async function updateRecurringExpense(id, projectId, amount, frequency, d
 export async function deleteRecurringExpense(id) {
   const { error } = await supabase.from("recurring_expenses").delete().eq("id", id);
 
+  if (error) throw error;
+}
+
+// Recurring revenue payment operations (project-linked period tracking)
+export async function addRecurringRevenuePayment(recurringRevenueId, projectId, periodDate, amount) {
+  const { data, error } = await supabase
+    .from("recurring_revenue_payments")
+    .insert([{ id: generateId(), recurring_revenue_id: recurringRevenueId, project_id: projectId, period_date: periodDate, amount }])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deleteRecurringRevenuePayment(id) {
+  const { error } = await supabase.from("recurring_revenue_payments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Recurring expense payment operations (project-linked period tracking)
+export async function addRecurringExpensePayment(recurringExpenseId, projectId, periodDate, amount) {
+  const { data, error } = await supabase
+    .from("recurring_expense_payments")
+    .insert([{ id: generateId(), recurring_expense_id: recurringExpenseId, project_id: projectId, period_date: periodDate, amount }])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deleteRecurringExpensePayment(id) {
+  const { error } = await supabase.from("recurring_expense_payments").delete().eq("id", id);
   if (error) throw error;
 }
 
