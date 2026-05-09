@@ -4,3 +4,9 @@ compatibility_date = "2026-05-09"
 
 [triggers]
 crons = ["0 8 */3 * *"]
+
+# Public anon-only credentials (also exposed in the SPA bundle).
+# Never put a service_role key or any non-public secret here — use `wrangler secret put` for those.
+[vars]
+SUPABASE_URL = "https://mssxrafomjlzoypjvjdu.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zc3hyYWZvbWpsem95cGp2amR1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NjY0NzcsImV4cCI6MjA4ODA0MjQ3N30.89v8KdYtqwR85SYe9QPcGpjb0Y-KKHW5MC35KVrFJfk"

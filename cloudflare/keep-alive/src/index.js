@@ -19,14 +19,11 @@ async function ping(env) {
   }
 
   try {
-    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/`, {
-      headers: {
-        apikey: env.SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
-      },
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/health`, {
+      headers: { apikey: env.SUPABASE_ANON_KEY },
     });
     console.log(`Supabase ping: ${res.status}`);
-    return { ok: true, message: `OK - ${res.status}` };
+    return { ok: res.ok, message: `OK - ${res.status}` };
   } catch (err) {
     console.error("Supabase ping failed:", err.message);
     return { ok: false, message: `Failed: ${err.message}` };
