@@ -147,9 +147,9 @@ All data persists! Open DevTools (F12) to see network requests.
 
 ## 🚀 Deployment Status
 
-**For Netlify:**
+**For Cloudflare Pages:**
 
-- ✅ Environment variables already set in your Netlify dashboard
+- ✅ Environment variables already set in your Cloudflare Pages dashboard
 - ✅ No code changes needed
 - ✅ Just run `git push` to deploy
 - ✅ App automatically uses Supabase in production

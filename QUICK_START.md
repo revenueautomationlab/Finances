@@ -62,7 +62,7 @@ SELECT * FROM projects;
 - **Database**: PostgreSQL (Supabase)
 - **Storage**: Zero local files
 - **Auth**: Public (open access)
-- **Hosting**: Your PC (local dev) or Netlify (production)
+- **Hosting**: Your PC (local dev) or Cloudflare Pages (production)
 
 ---
 
@@ -99,7 +99,7 @@ c:\Users\User\Desktop\RAL\Finances\
 ├── package.json ..................... ✅ Updated (dotenv added)
 ├── index.html
 ├── db.json .......................... ❌ Can delete (not used)
-├── netlify.toml ..................... Ready for deployment
+├── cloudflare/keep-alive/ ........... Worker that pings Supabase every 3 days (deployed via wrangler)
 └── migrations/ ...................... Reference docs (can delete)
 ```
 
@@ -125,7 +125,7 @@ c:\Users\User\Desktop\RAL\Finances\
 
 - `.env.local` has Supabase URL
 - `.env.local` has Supabase Key
-- Netlify dashboard also has them
+- Cloudflare Pages dashboard also has them
 
 ✅ **No local files**
 
@@ -136,7 +136,7 @@ c:\Users\User\Desktop\RAL\Finances\
 ✅ **Ready for production**
 
 - Run `npm run build`
-- Deploy to Netlify
+- Deploy to Cloudflare Pages
 - Use Supabase URLs automatically
 
 ---
@@ -194,7 +194,7 @@ For detailed info, read these files:
 
 Just click "New Project" and create as many as you want!
 
-### Deploy to Netlify
+### Deploy to Cloudflare Pages
 
 ```bash
 npm run build

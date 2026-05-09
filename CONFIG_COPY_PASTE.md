@@ -2,8 +2,8 @@
 
 ## Your Setup Details
 
-- **Dev URL**: http://localhost:5174
-- **Netlify URL**: https://ralfinance.netlify.app
+- **Dev URL**: http://localhost:5175
+- **Cloudflare Pages URL**: https://finance.raltech.dev
 - **Supabase Project ID**: mssxrafomjlzoypjvjdu
 
 ---
@@ -18,7 +18,7 @@ Put **ONLY THIS URL** in your Google OAuth client:
 https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback
 ```
 
-✅ That's the only one Google needs. Don't add localhost or Netlify here!
+✅ That's the only one Google needs. Don't add localhost or Cloudflare Pages here!
 
 ---
 
@@ -31,13 +31,13 @@ Add these two URLs:
 **URL 1 (Development):**
 
 ```
-http://localhost:5174/auth/callback
+http://localhost:5175/auth/callback
 ```
 
 **URL 2 (Production):**
 
 ```
-https://ralfinance.netlify.app/auth/callback
+https://finance.raltech.dev/auth/callback
 ```
 
 ✅ Add both of these to Supabase
@@ -152,8 +152,8 @@ supabase.auth.onAuthStateChange(async (event, session) => {
 6. Click **SAVE**
 7. Go to **Authentication** → **URL Configuration**
 8. Under **Redirect URLs**, add:
-   - `http://localhost:5174/auth/callback`
-   - `https://ralfinance.netlify.app/auth/callback`
+   - `http://localhost:5175/auth/callback`
+   - `https://finance.raltech.dev/auth/callback`
 9. Click **Save**
 
 ### 3️⃣ Test It
@@ -162,7 +162,7 @@ supabase.auth.onAuthStateChange(async (event, session) => {
 npm run dev
 ```
 
-1. Go to http://localhost:5174
+1. Go to http://localhost:5175
 2. Click **"Sign in with Google"**
 3. Sign in with **revenueautomationlab@gmail.com** → ✅ Should work!
 4. Sign in with another email → ❌ Auto sign out (expected!)

@@ -46,7 +46,7 @@
    ```
 
    > ✅ This is the ONLY URL Google needs!
-   > Your localhost and Netlify URLs will go in Supabase, not here.
+   > Your localhost and Cloudflare Pages URLs will go in Supabase, not here.
 
 8. Click **CREATE**
 9. You'll see a popup with:
@@ -86,8 +86,8 @@ You now have:
 2. Under **Redirect URLs**, click **+ Add URL**
 3. Add these 2 URLs (one at a time):
    ```
-   http://localhost:5174/auth/callback
-   https://ralfinance.netlify.app/auth/callback
+   http://localhost:5175/auth/callback
+   https://finance.raltech.dev/auth/callback
    ```
    > ✅ These go in Supabase (not in Google Cloud!)
 4. Click **Save**
@@ -101,7 +101,7 @@ You now have:
 ### First Login
 
 1. Start your app: `npm run dev`
-2. Go to http://localhost:5174
+2. Go to http://localhost:5175
 3. Click **"Sign in with Google"**
 4. You'll be redirected to Google login
 5. Sign in with any Google account
@@ -124,7 +124,7 @@ You now have:
 
 - Make sure Supabase URL Configuration has your redirect URLs
 - Make sure Google Cloud has ONLY: `https://mssxrafomjlzoypjvjdu.supabase.co/auth/v1/callback`
-- Don't add localhost or Netlify URLs to Google Cloud - those go in Supabase only!
+- Don't add localhost or Cloudflare Pages URLs to Google Cloud - those go in Supabase only!
 
 ### "Invalid Client"
 
@@ -189,16 +189,16 @@ You now have:
 | **Supabase**     | Provider                 | Google (Enabled)                                                                       |
 | **Supabase**     | Client ID                | From Google Cloud                                                                      |
 | **Supabase**     | Client Secret            | From Google Cloud                                                                      |
-| **Supabase**     | Redirect URLs            | `http://localhost:5174/auth/callback` + `https://ralfinance.netlify.app/auth/callback` |
+| **Supabase**     | Redirect URLs            | `http://localhost:5175/auth/callback` + `https://finance.raltech.dev/auth/callback` |
 | **App**          | Authorized Email         | revenueautomationlab@gmail.com                                                         |
 
 ---
 
 ## Moving to Production
 
-Good news! You've already added your Netlify URL to Supabase in the setup steps above.
+Good news! You've already added your Cloudflare Pages URL to Supabase in the setup steps above.
 
-Google Cloud is already configured with the Supabase callback (no changes needed for Netlify).
+Google Cloud is already configured with the Supabase callback (no changes needed for Cloudflare Pages).
 
 Just deploy:
 
@@ -207,7 +207,7 @@ npm run build
 git push
 ```
 
-Your app will work on https://ralfinance.netlify.app automatically! 🚀
+Your app will work on https://finance.raltech.dev automatically! 🚀
 
 No additional configuration needed.
 

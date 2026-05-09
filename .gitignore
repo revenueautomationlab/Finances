@@ -11,3 +11,6 @@ dist
 # Supabase local dev (keep migrations and config)
 supabase/.temp
 supabase/.branches
+
+# Local Claude Code agent settings (per-machine, not project)
+.claude/
