@@ -8,7 +8,7 @@ Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects
 - **Database**: Supabase (PostgreSQL)
 - **Auth**: Google OAuth via Supabase Auth (restricted to `revenueautomationlab@gmail.com`)
 - **Routing**: react-router-dom v6
-- **Hosting**: Netlify (`ralfinance.netlify.app`)
+- **Hosting**: Cloudflare Pages (`finance.raltech.dev`, also reachable at `ral-finance.pages.dev`)
 - **Currency**: BHD (Bahraini Dinar, 3 decimal places)
 - **Migrations**: Supabase CLI + GitHub Actions auto-deploy
 - **MCP Tools**: Playwright (browser automation/testing), shadcn (UI components)
@@ -36,9 +36,11 @@ supabase/
     ├── 20260320030000_budgets.sql .......... Budgets + budget_spending tables
     └── 20260320040000_recurring.sql ........ Recurring revenue + expenses tables
 
-netlify/
-└── functions/
-    └── keep-alive.mjs ............. Pings Supabase every 3 days to prevent free-tier pausing
+cloudflare/
+└── keep-alive/
+    ├── wrangler.toml .............. Worker config — cron `0 8 */3 * *`, [vars] hold public Supabase URL + anon key
+    └── src/
+        └── index.js ............... Worker that pings Supabase `/auth/v1/health` every 3 days to prevent free-tier pausing
 
 .github/
 └── workflows/
@@ -135,7 +137,7 @@ All tables have:
 
 ## Local Development
 - Run `bun dev` to start the local dev server at `http://localhost:5175` (port forced via `strictPort: true` in vite.config.js)
-- OAuth redirect uses `window.location.origin` automatically — resolves to `localhost:5175` locally and `ralfinance.netlify.app` in prod
+- OAuth redirect uses `window.location.origin` automatically — resolves to `localhost:5175` locally and `finance.raltech.dev` in prod
 - **Supabase dashboard requirement**: `http://localhost:5175/auth/callback` must be listed in Authentication → URL Configuration → Redirect URLs
 - `.env.development` contains Supabase credentials (gitignored) — same Supabase project for local and production
 - AuthCallbackPage explicitly exchanges session on mount (checks URL hash/code params)
@@ -148,5 +150,5 @@ All tables have:
 - **Always update this CLAUDE.md** when making architectural changes, adding features, or changing patterns
 - **Always update memory files** in the memory directory when learning new project context
 - **DB changes** always go through migration files — never modify the DB directly
-- **Keep Supabase free tier alive** via the Netlify scheduled function
+- **Keep Supabase free tier alive** via the Cloudflare Worker at `cloudflare/keep-alive/` (deploy with `npx wrangler deploy` from that dir)
 - Supabase project ref: `mssxrafomjlzoypjvjdu`
