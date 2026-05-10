@@ -1,7 +1,7 @@
 # RAL Finance - Project Guide
 
 ## Overview
-Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects, payments, expenses, and splits profit 4 ways (Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%). Includes budgets, recurring items, partner withdrawals, and comprehensive reports.
+Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects (which can be free or paid), and splits **contract-only** profit 4 ways (Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%). **Recurring revenue is decoupled from project profit** — paid recurring installments and active general recurring revenue flow directly into the bank spendable pool, which funds operations and partner dividend payouts. Domain expiries and recurring revenue end-dates trigger countdown alerts on the dashboard.
 
 ## Tech Stack
 - **Frontend**: React 18 + Vite 4 (vanilla JSX, no TypeScript)
@@ -34,7 +34,10 @@ supabase/
     ├── 20260320010000_rename_shares.sql .... Rename charity_spending → secret_investment_spending
     ├── 20260320020000_partner_withdrawals.sql .. Partner withdrawals table
     ├── 20260320030000_budgets.sql .......... Budgets + budget_spending tables
-    └── 20260320040000_recurring.sql ........ Recurring revenue + expenses tables
+    ├── 20260320040000_recurring.sql ........ Recurring revenue + expenses tables
+    ├── 20260320050000_recurring_payments.sql .. Period-paid tracking tables
+    ├── 20260320060000_recurring_nullable_dates.sql .. Make start_date / next_due nullable
+    └── 20260510000000_dividends_domains_expiries.sql .. partner_dividends, domains, end_date columns
 
 cloudflare/
 └── keep-alive/
@@ -49,18 +52,20 @@ cloudflare/
 
 ## Database Schema
 Tables:
-- `projects` — client projects with name, total_value
+- `projects` — client projects (`total_value` may be 0 for "free + recurring upsell" projects)
 - `payments` — project payments (FK to projects, CASCADE delete)
 - `expenses` — project expenses (FK to projects, CASCADE delete)
 - `bank_spending` — spending from bank savings share
 - `secret_investment_spending` — spending from secret investment share (renamed from charity_spending)
-- `partner_withdrawals` — partner withdrawals with CHECK constraint on partner_name ('suhaib'/'mohammed')
+- `partner_withdrawals` — share-based withdrawals (drawn against the partner's accumulated 10% share); CHECK on partner_name ('suhaib'/'mohammed')
+- `partner_dividends` — bank-funded dividend payouts (the salary mechanism); CHECK on partner_name
 - `budgets` — budget categories with name, allocated_amount, description
 - `budget_spending` — spending against budgets (FK to budgets, CASCADE delete)
-- `recurring_revenue` — recurring revenue items (nullable project_id, frequency: monthly/yearly, active boolean)
-- `recurring_expenses` — recurring expense items (nullable project_id, frequency: monthly/yearly, active boolean)
-- `recurring_revenue_payments` — paid period records for project-linked recurring revenue (FK to recurring_revenue + projects, UNIQUE on recurring_revenue_id+period_date)
-- `recurring_expense_payments` — paid period records for project-linked recurring expenses (FK to recurring_expenses + projects, UNIQUE on recurring_expense_id+period_date)
+- `recurring_revenue` — recurring revenue items (nullable project_id, frequency: monthly/yearly, active, optional `end_date` for expiry alerts)
+- `recurring_expenses` — recurring expense items (nullable project_id, frequency: monthly/yearly, active, optional `end_date`)
+- `recurring_revenue_payments` — paid period records for project-linked recurring revenue (UNIQUE on recurring_revenue_id+period_date)
+- `recurring_expense_payments` — paid period records for project-linked recurring expenses (UNIQUE on recurring_expense_id+period_date)
+- `domains` — owned domains with `expiry_date`, optional `project_id` and `recurring_revenue_id` links, `registrar`, `auto_renew`, `notes`
 
 All tables have:
 - RLS enabled (authenticated users only)
@@ -77,50 +82,82 @@ All tables have:
 
 ## Business Logic
 
-### Profit Calculation
-- **contractPayments** = sum of payment records for the project
-- **totalPaid** = contractPayments + sum of paid recurring revenue installments (from recurring_revenue_payments)
-- **totalRevenue** = totalPaid (cash received — contract payments + paid recurring installments)
-- **totalPotential** = totalValue + projRecurringRevTotal (full potential if all periods paid; used for progress bars)
-- **totalExpenses** = project expenses + all generated recurring expense periods (all periods always count as costs)
-- **Profit** = totalRevenue - totalExpenses (cash-basis: received revenue minus all costs)
-- **Profit Split**: If profit > 0: Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%
-- **unpaid** = contractUnpaid + recurringPending (combined outstanding from contract + pending recurring installments)
+### Project Profit (Contract + Tagged Recurring)
+A project gets credited for recurring revenue tagged to it, so projects earning recurring aren't shown as money-losers. The 4-way profit split (55/10/10/25) applies to this combined profit, so paid project-linked recurring still ends up flowing to the bank pool through the bank's 55% share — no double counting.
+- **contractPayments** = sum of `payments` records for the project
+- **projRecurringPaid** = sum of `recurring_revenue_payments` amounts for streams tagged to this project
+- **totalPaid** = contractPayments + projRecurringPaid (recurring credited to the project)
+- **totalRevenue** = totalPaid
+- **totalPotential** = totalValue (contract amount; "paid" status is contract-based — recurring is ongoing/extra)
+- **totalExpenses** = project `expenses` + all generated recurring-expense periods linked to this project (accrual basis)
+- **profit** = totalRevenue − totalExpenses
+- **Profit Split** (only when profit > 0): Bank 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%
+- **unpaid** = max(0, totalValue − contractPayments). Free projects (`totalValue = 0`) are immediately marked Paid (badge: "Free"). Status badge = "Paid" / "Partial" / "Unpaid" tracks contract only.
+- **isPaid** = unpaid <= 0
 
-### Recurring Items Integration
-- **Project-linked recurring**: Uses period tracking. `generateRecurringPeriods(startDate, frequency)` generates all periods from start_date to current month/year. Revenue periods can be marked paid/unpaid in the project detail view. Expense periods track payment status but ALL periods always count toward totalExpenses.
-- **Paid period storage**: A record in `recurring_revenue_payments` or `recurring_expense_payments` = paid. No record = unpaid. Marking paid = INSERT; marking unpaid = DELETE.
-- **General recurring** (no project): Uses single-amount logic (not period-tracked). Creates its own profit split via `generalRecurring*Share` variables.
-- `generalRecurringRev` = sum of active recurring revenue without project_id
-- `generalRecurringExp` = sum of active recurring expenses without project_id
-- `generalRecurringProfit` = generalRecurringRev - generalRecurringExp
-- `generalRecurringShare` = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0
-- Global totals include both project-linked and general recurring
+### Recurring Revenue Flow
+- Project-linked recurring revenue uses period tracking (`generateRecurringPeriods` from start_date through the current period). A record in `recurring_revenue_payments` for a (recurring_revenue_id, period_date) pair = paid; missing = unpaid.
+- **Paid project-linked recurring is credited to the project** and split 4 ways via the project's profit. Bank gets 55% of it (not 100%).
+- **General (untagged) recurring revenue flows 100% directly to the bank pool** (active items × amount, since general items don't have payment tracking).
+- Recurring expenses behave by tag:
+  - Project-linked recurring expenses stay on the project (counted in project totalExpenses, accrual basis — all periods count regardless of paid status).
+  - General recurring expenses (no project_id) come out of the bank pool (`generalRecurringExp`).
 
-### Bank & Budget Logic
-- **totalPhysicalBank** = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - secretInvestmentSpent - bankSpent - budgetSpent
-- **bankSpendable** = bank's 25% share income - bank spending - budget spending (budgets come from the bank share)
-- **Bank & Secret Investment** income includes `generalRecurringShare`
-- **Partner Withdrawals**: Suhaib and Mohammed can withdraw from their 25% share
-- **Available Balance** = accumulated share - withdrawn/spent
+### Partner Compensation (Two Pots)
+1. **10% Share** (project profit only) — accumulates per project, drawn down via `partner_withdrawals`. Available = earned − withdrawn.
+2. **Bank Dividends** — flat payouts from `bankSpendable`, recorded in `partner_dividends`. This is the salary mechanism funded by recurring revenue. Capped only by bank spendable.
 
-### Key Computed Values (all via useMemo)
-- `projectStats` — per-project stats including recurring items, profit, and 4-way split
-- `globalBank` — bank share income (includes generalRecurringShare), spent, balance
-- `globalSecretInvestment` — secret investment share income (includes generalRecurringShare), spent, balance
-- `bankSpendable` — bank share minus bank spending minus budget spending
-- `totalPhysicalBank` — actual money in the bank after all deductions
+### Bank & Cash Position
+- **globalBank.income** = `projectShare` (55% of all project profit, which already includes tagged paid recurring) + `recurringRevenueIncome.generalActive` (untagged recurring flows 100% direct to bank)
+  - **NOT** added separately: tagged paid recurring (avoids double counting — it's already in projectShare via the 55% split)
+- **globalBank.spent** = `bank_spending` records only
+- **bankSpendable** = `globalBank.income − globalBank.spent − totalBudgetSpent − totalDividendsPaid − generalRecurringExp`
+  (Budgets, dividends, and general recurring expenses all draw from the bank pool.)
+- **globalRevenue** = `globalProjectRevenue` (contract + tagged recurring paid) + `recurringRevenueIncome.generalActive` (no double counting)
+
+### Operating vs Distributions
+Distinction between business costs and money paid to ourselves matters for margin calculations.
+- **operatingOutflow** = project expenses (incl. project-linked recurring) + general recurring expenses + bank spending + budget spending + secret investment spending
+  - Does NOT include partner withdrawals or dividends
+- **operatingNet** = globalRevenue − operatingOutflow (what the business made before paying owners)
+- **globalMargin** = operatingNet ÷ globalRevenue × 100 (operating margin, shown on Dashboard and Projects view)
+- **totalDistributions** = partner withdrawals + dividends paid (money out to Suhaib/Mohammed)
+- **totalPhysicalBank** = operatingNet − totalDistributions (true cash position — what's actually in the bank)
+
+### Expiry Alerts
+- `daysUntil(date)` and `reminderThresholdDays(frequency)` (90 days for yearly, 7 for monthly).
+- The `expiryAlerts` memo aggregates:
+  - Domains with `expiry_date ≤ 90 days` away (suppressed if another row with the same `name` has a later expiry — i.e. a renewal entry exists)
+  - Active recurring revenue with `end_date ≤ threshold` (suppressed if a successor active recurring revenue exists with the same project_id (or matching description for general items) and `start_date > end_date`)
+- Severity levels: `overdue` (negative days), `urgent` (≤ 30d for domains, ≤ ⅓ threshold for recurring), `soon` otherwise.
+- Rendered as `<ExpiryAlertsBanner>` at the top of the Dashboard.
+
+### Key Computed Values (all via useMemo or top-level memos)
+- `projectStats` — per-project stats: `{ contractPayments, projRecurringPaid, projRecurringExpTotal, totalPaid, totalRevenue, totalExpenses, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare, unpaid, isPaid, ... }`
+- `recurringRevenueIncome` — `{ projectLinkedPaid, generalActive, total }`
+- `globalBank` — `{ projectShare, income, spent, balance }`
+- `globalSecretInvestment` — `{ income, spent, balance }` (project profit's 25% only — no recurring)
+- `globalProjectRevenue` — sum(p.totalRevenue) including tagged recurring
+- `globalContractRevenue` — sum(p.contractPayments) (contract only)
+- `globalRevenue` — globalProjectRevenue + generalActive
+- `globalExpenses` — project expenses (incl. project-linked recurring) + generalRecurringExp
+- `operatingOutflow` — globalExpenses + bank/budget/secret spending (excludes partner payouts)
+- `operatingNet` / `globalMargin` — pre-distribution net & margin
+- `totalDistributions` — withdrawals + dividends
+- `bankSpendable` / `totalPhysicalBank` — bank pool minus its outflows; true cash position
 - `budgetStats` — per-budget allocated vs spent
+- `expiryAlerts` — sorted list of upcoming domain/recurring expiries
 
 ## App Views
-1. **Dashboard** — Summary cards (revenue, expenses, profit, bank total), profit distribution, partner balances with withdrawals, budget & recurring quick overview, projects table
-2. **Projects** — List of all projects with value, paid, unpaid, expenses, profit, status
-3. **Project Detail** — Individual project: payments table, expenses table, profit split per project
-4. **Bank Savings** — Total in bank, bank share, bank spent, bank available (bankSpendable), money allocation breakdown, spending history, project contributions, recurring impact card
-5. **Budgets** — Budget cards with progress bars, spending tracking per budget, CRUD for budgets and spending
-6. **Recurring** — Recurring revenue and expenses tables with active/pause toggle, frequency, project association
-7. **Reports** — Monthly P&L, Partner Summary, Budget Utilization, Recurring Obligations, Cash Flow Summary, Project Performance
-8. **Secret Investment** — Secret investment share, spending, balance, spending history
+1. **Dashboard** — Expiry alerts banner (when applicable), comprehensive revenue/outflow/margin/bank stat cards, project profit distribution, partner balances with both share-withdraw and bank-dividend buttons, recent activity table (mixed withdrawals + dividends), budget & recurring quick overview, projects table
+2. **Projects** — Summary stats (paid/unpaid/expenses/project profit/all-in margin/in-bank), project cards with payment progress (free projects show "Free" badge)
+3. **Project Detail** — Contract value (or "Free + Recurring" badge), payments and expenses tables, profit split (contract-only), recurring revenue periods (mark paid/unpaid), recurring expenses periods
+4. **Bank Savings** — Total in bank, bank inflow/outflow/spendable, bank pool composition (inflow & outflow lines), partner dividends payout & history, spending history, project contributions, recurring impact
+5. **Budgets** — Budget cards with progress bars, spending tracking, CRUD
+6. **Recurring** — Revenue + expenses tables with frequency, project, end-date column (yellow when within reminder threshold), active/pause, full CRUD. Add-revenue modal supports optional inline domain creation.
+7. **Domains** — Full CRUD list of owned domains with expiry countdown badges, optional links to projects + recurring revenue, registrar, auto-renew, notes
+8. **Reports** — Monthly P&L (contract + recurring revenue), Partner Summary (earned/withdrawn/dividends), Budget Utilization, Recurring Obligations, Cash Flow Summary (with dividends + recurring lines), Project Performance
+9. **Secret Investment** — Secret investment share (project profit 25%), spending, balance, spending history
 
 ## Key Patterns
 - Single-file App.jsx with nested function components

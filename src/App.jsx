@@ -31,6 +31,11 @@ import {
   deleteRecurringRevenuePayment as dbDeleteRecurringRevenuePayment,
   addRecurringExpensePayment as dbAddRecurringExpensePayment,
   deleteRecurringExpensePayment as dbDeleteRecurringExpensePayment,
+  addPartnerDividend as dbAddPartnerDividend,
+  deletePartnerDividend as dbDeletePartnerDividend,
+  addDomain as dbAddDomain,
+  updateDomain as dbUpdateDomain,
+  deleteDomain as dbDeleteDomain,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -51,6 +56,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2, Pencil, Eye, ArrowLeft,
   Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
   ArrowDownRight, Target, Loader2, AlertTriangle, Percent, CheckCircle2, X,
+  Globe, Clock, BadgeDollarSign,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -114,10 +120,34 @@ const getYearPotentialCount = (startDate, frequency) => {
   return (yearEnd.getFullYear() - from.getFullYear()) * 12 + yearEnd.getMonth() - from.getMonth() + 1;
 };
 
+// Days between today (local) and an ISO date string. Negative = past.
+const daysUntil = (dateStr) => {
+  if (!dateStr) return null;
+  const target = new Date(dateStr + "T00:00:00");
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / (1000 * 60 * 60 * 24));
+};
+
+// Reminder threshold: 90 days for yearly cadence, 7 days for monthly
+const reminderThresholdDays = (frequency) => (frequency === "monthly" ? 7 : 90);
+
+const formatExpiryDistance = (days) => {
+  if (days === null || days === undefined) return "";
+  if (days < 0) return `${Math.abs(days)}d overdue`;
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days < 30) return `${days}d`;
+  const months = Math.round(days / 30);
+  return `${months}mo`;
+};
+
 const initialState = {
   projects: [], bankSpending: [], secretInvestmentSpending: [],
-  partnerWithdrawals: [], budgets: [], recurringRevenue: [], recurringExpenses: [],
+  partnerWithdrawals: [], partnerDividends: [],
+  budgets: [], recurringRevenue: [], recurringExpenses: [],
   recurringRevenuePayments: [], recurringExpensePayments: [],
+  domains: [],
 };
 
 // --- Stat Card Component ---
@@ -230,74 +260,108 @@ export default function App() {
     setConfirm({ title, message, action, onConfirm, isDangerous });
   };
 
-  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments } = state;
+  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, partnerDividends, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments, domains } = state;
 
   // --- Computed Values ---
+  // Project profit credits the project for recurring revenue tagged to it (paid installments).
+  // Recurring expenses linked to a project also count as project costs. So a project earning
+  // recurring isn't shown as a money-loser. The 4-way split (55/10/10/25) applies to this
+  // combined profit, so paid project-linked recurring still ends up flowing to the bank pool
+  // through the bank's 55% share — no double counting.
+  // General (untagged) recurring revenue flows 100% to the bank pool directly.
   const projectStats = useMemo(() => {
     return projects.map((p) => {
       const contractPayments = (p.payments || []).reduce((a, x) => a + x.amount, 0);
       const projectExpenses = (p.expenses || []).reduce((a, x) => a + x.amount, 0);
 
-      // Project-linked recurring items
+      // Project-linked recurring streams
       const projLinkedRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id);
       const projLinkedExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id);
 
-      // All generated periods × amount (accrual basis)
-      const projRecurringRevTotal = projLinkedRev.reduce((a, r) => a + generateRecurringPeriods(r.startDate, r.frequency).length * r.amount, 0);
-      const projRecurringExpTotal = projLinkedExp.reduce((a, r) => a + generateRecurringPeriods(r.startDate, r.frequency).length * r.amount, 0);
-
-      // Cash received from paid recurring revenue installments
-      const projRecurringRevPaid = recurringRevenuePayments
+      // Paid project-linked recurring revenue is credited to the project as earned income
+      const projRecurringPaid = recurringRevenuePayments
         .filter((rp) => projLinkedRev.some((r) => r.id === rp.recurringRevenueId))
         .reduce((a, rp) => a + rp.amount, 0);
 
-      const totalPaid = contractPayments + projRecurringRevPaid;
-      const totalRevenue = totalPaid; // cash received — what's actually been paid
-      // totalPotential: contract + each recurring stream projected to end of current year
-      const projRecurringYearPotential = projLinkedRev.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
-      const totalPotential = p.totalValue + projRecurringYearPotential;
+      // Recurring expenses linked to this project — accrual basis (all generated periods)
+      const projRecurringExpTotal = projLinkedExp.reduce(
+        (a, r) => a + generateRecurringPeriods(r.startDate, r.frequency).length * r.amount,
+        0,
+      );
+
+      const totalPaid = contractPayments + projRecurringPaid;
+      const totalRevenue = totalPaid;
+      const totalPotential = p.totalValue; // contract-only — "paid" status is contract-based
       const totalExp = projectExpenses + projRecurringExpTotal;
       const profit = totalRevenue - totalExp;
-      const contractUnpaid = p.totalValue - contractPayments;
-      const recurringPending = projRecurringRevTotal - projRecurringRevPaid;
-      const unpaid = contractUnpaid + recurringPending;
+      // "Paid" status reflects the contract only — recurring is extra/ongoing
+      const unpaid = Math.max(0, p.totalValue - contractPayments);
+      const isPaid = unpaid <= 0;
 
       const bankShare = profit > 0 ? profit * 0.55 : 0;
       const suhaibShare = profit > 0 ? profit * 0.10 : 0;
       const mohammedShare = profit > 0 ? profit * 0.10 : 0;
       const secretInvestmentShare = profit > 0 ? profit * 0.25 : 0;
-      return { ...p, contractPayments, totalPaid, totalRevenue, totalPotential, unpaid, contractUnpaid, recurringPending, totalExpenses: totalExp, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare };
+      return {
+        ...p,
+        contractPayments,
+        projRecurringPaid,
+        projRecurringExpTotal,
+        totalPaid, totalRevenue, totalPotential,
+        unpaid, contractUnpaid: unpaid, isPaid,
+        totalExpenses: totalExp,
+        profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare,
+      };
     });
   }, [projects, recurringRevenue, recurringExpenses, recurringRevenuePayments]);
 
-  const generalRecurringRev = recurringRevenue.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
-  const generalRecurringExp = recurringExpenses.filter((r) => r.active && !r.projectId).reduce((a, r) => a + r.amount, 0);
-  const generalRecurringProfit = generalRecurringRev - generalRecurringExp;
-  const generalRecurringBankShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.55 : 0;
-  const generalRecurringSuhaibShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.10 : 0;
-  const generalRecurringMohammedShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.10 : 0;
-  const generalRecurringSecretShare = generalRecurringProfit > 0 ? generalRecurringProfit * 0.25 : 0;
+  // Recurring revenue inflow breakdown.
+  // - projectLinkedPaid: already credited to the relevant project (and split 55/10/10/25 via projectStats)
+  // - generalActive: untagged streams flow 100% directly to bank pool
+  const recurringRevenueIncome = useMemo(() => {
+    const projectLinkedPaid = recurringRevenuePayments.reduce((a, rp) => a + rp.amount, 0);
+    const generalActive = recurringRevenue
+      .filter((r) => r.active && !r.projectId)
+      .reduce((a, r) => a + r.amount, 0);
+    return { projectLinkedPaid, generalActive, total: projectLinkedPaid + generalActive };
+  }, [recurringRevenuePayments, recurringRevenue]);
+
+  // General recurring expenses (no project link) come out of the bank pool
+  const generalRecurringExp = recurringExpenses
+    .filter((r) => r.active && !r.projectId)
+    .reduce((a, r) => a + r.amount, 0);
 
   const globalBank = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.bankShare, 0) + generalRecurringBankShare;
+    // Bank gets 55% of project profit (which now already includes paid project-linked recurring)
+    // plus 100% of general (untagged) active recurring revenue.
+    const projectShare = projectStats.reduce((a, p) => a + p.bankShare, 0);
+    const income = projectShare + recurringRevenueIncome.generalActive;
     const spent = bankSpending.reduce((a, x) => a + x.amount, 0);
-    return { income, spent, balance: income - spent };
-  }, [projectStats, bankSpending, generalRecurringBankShare]);
+    return { income, spent, projectShare, balance: income - spent };
+  }, [projectStats, bankSpending, recurringRevenueIncome]);
 
   const globalSecretInvestment = useMemo(() => {
-    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0) + generalRecurringSecretShare;
+    const income = projectStats.reduce((a, p) => a + p.secretInvestmentShare, 0);
     const spent = secretInvestmentSpending.reduce((a, x) => a + x.amount, 0);
     return { income, spent, balance: income - spent };
-  }, [projectStats, secretInvestmentSpending, generalRecurringSecretShare]);
+  }, [projectStats, secretInvestmentSpending]);
 
-  const globalProfit = projectStats.reduce((a, p) => a + p.profit, 0) + generalRecurringProfit;
-  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0) + generalRecurringSuhaibShare;
-  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0) + generalRecurringMohammedShare;
-  const globalRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0) + generalRecurringRev;
+  const globalProjectProfit = projectStats.reduce((a, p) => a + p.profit, 0);
+  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0);
+  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0);
+  // Project revenue includes contract payments + tagged paid recurring (already credited per project)
+  const globalProjectRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0);
+  const globalContractRevenue = projectStats.reduce((a, p) => a + p.contractPayments, 0);
+  // Total revenue = project-attributed revenue (contract + tagged recurring paid) + general (untagged) recurring
+  const globalRevenue = globalProjectRevenue + recurringRevenueIncome.generalActive;
+  // Operating expenses (true costs, NOT including owner distributions like withdrawals/dividends)
   const globalExpenses = projectStats.reduce((a, p) => a + p.totalExpenses, 0) + generalRecurringExp;
-  // Year-end potential: project contracts + all recurring projected to Dec 31
-  const globalPotential = projectStats.reduce((a, p) => a + p.totalPotential, 0)
-    + recurringRevenue.filter((r) => r.active && !r.projectId).reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
+  // Year-end potential: project contracts + active recurring projected to Dec 31 (informational)
+  const globalPotential =
+    projectStats.reduce((a, p) => a + p.totalPotential, 0)
+    + recurringRevenue
+      .filter((r) => r.active)
+      .reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
   const suhaibWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "suhaib");
   const mohammedWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "mohammed");
   const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
@@ -305,15 +369,100 @@ export default function App() {
   const suhaibAvailable = globalSuhaib - suhaibWithdrawn;
   const mohammedAvailable = globalMohammed - mohammedWithdrawn;
 
+  // Bank-funded dividend payouts (the salary mechanism)
+  const suhaibDividends = partnerDividends.filter((d) => d.partnerName === "suhaib");
+  const mohammedDividends = partnerDividends.filter((d) => d.partnerName === "mohammed");
+  const suhaibDividendsTotal = suhaibDividends.reduce((a, d) => a + d.amount, 0);
+  const mohammedDividendsTotal = mohammedDividends.reduce((a, d) => a + d.amount, 0);
+  const totalDividendsPaid = suhaibDividendsTotal + mohammedDividendsTotal;
+
   const budgetStats = budgets.map((b) => {
     const spent = (b.spending || []).reduce((a, s) => a + s.amount, 0);
     return { ...b, spent, remaining: b.allocatedAmount - spent };
   });
   const totalBudgetAllocated = budgetStats.reduce((a, b) => a + b.allocatedAmount, 0);
   const totalBudgetSpent = budgetStats.reduce((a, b) => a + b.spent, 0);
-  const totalPhysicalBank = globalRevenue - globalExpenses - suhaibWithdrawn - mohammedWithdrawn - globalSecretInvestment.spent - globalBank.spent - totalBudgetSpent;
-  const bankSpendable = globalBank.income - globalBank.spent - totalBudgetSpent;
+
+  // Owner distributions — money paid to ourselves (NOT counted as outflow for margin/operating purposes,
+  // but obviously still leaves the bank account so it factors into totalPhysicalBank).
+  const totalDistributions = suhaibWithdrawn + mohammedWithdrawn + totalDividendsPaid;
+
+  // Operating outflow — true business costs (project + general recurring expenses + bank/budget/secret spending).
+  // Does NOT include owner distributions.
+  const operatingOutflow =
+    globalExpenses
+    + globalBank.spent
+    + globalSecretInvestment.spent
+    + totalBudgetSpent;
+
+  // Operating net & margin — what the business made before paying ourselves
+  const operatingNet = globalRevenue - operatingOutflow;
+  const globalMargin = globalRevenue > 0 ? (operatingNet / globalRevenue) * 100 : 0;
+
+  // Bank spendable: bank pool minus all bank-funded outflows (spending, budgets, dividends, general recurring expenses)
+  const bankSpendable = globalBank.income - globalBank.spent - totalBudgetSpent - totalDividendsPaid - generalRecurringExp;
+
+  // True cash position: revenue − operating outflow − owner distributions (everything that left the bank)
+  const totalPhysicalBank = operatingNet - totalDistributions;
+
   const selectedProject = projectStats.find((p) => p.id === selectedProjectId) || null;
+
+  // --- Expiry Alerts (domains + recurring revenue end_date) ---
+  // Suppress an alert if a successor exists: another active recurring rev with matching project_id
+  // (or matching description for general items) and start_date >= the expiring item's end_date.
+  const expiryAlerts = useMemo(() => {
+    const alerts = [];
+
+    // Domain expiries — yearly cadence threshold (90d). Suppressed if a domain with same name
+    // and a later expiry_date exists (renewal added as a new row), or if the same row's expiry was bumped.
+    domains.forEach((d) => {
+      const days = daysUntil(d.expiryDate);
+      if (days === null || days > 90) return;
+      const renewed = domains.some(
+        (other) => other.id !== d.id && other.name.toLowerCase() === d.name.toLowerCase() && daysUntil(other.expiryDate) > days,
+      );
+      if (renewed) return;
+      alerts.push({
+        kind: "domain",
+        id: d.id,
+        title: d.name,
+        subtitle: d.registrar ? `Registrar: ${d.registrar}` : "Domain expiry",
+        date: d.expiryDate,
+        days,
+        severity: days < 0 ? "overdue" : days <= 30 ? "urgent" : "soon",
+      });
+    });
+
+    // Recurring revenue with end_date — threshold by frequency
+    recurringRevenue.forEach((r) => {
+      if (!r.active || !r.endDate) return;
+      const days = daysUntil(r.endDate);
+      if (days === null) return;
+      const threshold = reminderThresholdDays(r.frequency);
+      if (days > threshold) return;
+      // Successor: another active recurring revenue with same project (or matching description for general)
+      // and start_date strictly after this end_date.
+      const successor = recurringRevenue.some((other) => {
+        if (other.id === r.id || !other.active || !other.startDate) return false;
+        const startsAfter = other.startDate > r.endDate;
+        if (!startsAfter) return false;
+        if (r.projectId) return other.projectId === r.projectId;
+        return other.description.trim().toLowerCase() === r.description.trim().toLowerCase();
+      });
+      if (successor) return;
+      alerts.push({
+        kind: "recurring",
+        id: r.id,
+        title: r.description,
+        subtitle: `${r.frequency} · ${currency(r.amount)}${r.projectId ? ` · ${projects.find((p) => p.id === r.projectId)?.name || "project"}` : " · general"}`,
+        date: r.endDate,
+        days,
+        severity: days < 0 ? "overdue" : days <= Math.max(7, Math.floor(threshold / 3)) ? "urgent" : "soon",
+      });
+    });
+
+    return alerts.sort((a, b) => a.days - b.days);
+  }, [domains, recurringRevenue, projects]);
 
   // --- CRUD Operations ---
   const addProject = async (name, totalValue) => {
@@ -585,12 +734,15 @@ export default function App() {
     }, true);
   };
 
-  const addRecurringRevenue = async (projectId, amount, frequency, description, startDate) => {
+  const addRecurringRevenue = async (projectId, amount, frequency, description, startDate, endDate, domainName, domainExpiry) => {
     setLoading(true);
     try {
-      await dbAddRecurringRevenue(projectId, amount, frequency, description, startDate);
+      const created = await dbAddRecurringRevenue(projectId, amount, frequency, description, startDate, endDate);
+      if (domainName && domainExpiry) {
+        await dbAddDomain(domainName, domainExpiry, projectId || null, created?.id || null, null, false, null);
+      }
       await refreshData();
-      toast.success(`Recurring revenue "${description}" added`);
+      toast.success(`Recurring revenue "${description}" added${domainName ? ` (with domain ${domainName})` : ""}`);
       setModal(null);
     } catch (error) {
       toast.error(`Failed to add recurring revenue: ${error.message}`);
@@ -619,7 +771,7 @@ export default function App() {
     setLoading(true);
     try {
       const item = recurringRevenue.find((r) => r.id === id);
-      await dbUpdateRecurringRevenue(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
+      await dbUpdateRecurringRevenue(id, item.projectId, item.amount, item.frequency, item.description, !currentActive, item.startDate ?? null, item.endDate ?? null);
       await refreshData();
       toast.success(`Recurring revenue ${!currentActive ? "activated" : "paused"}`);
     } catch (error) {
@@ -629,11 +781,12 @@ export default function App() {
     }
   };
 
-  const editRecurringRevenue = async (id, amount, frequency, description, startDate) => {
+  const editRecurringRevenue = async (id, amount, frequency, description, startDate, endDate) => {
     setLoading(true);
     try {
       const item = recurringRevenue.find((r) => r.id === id);
-      await dbUpdateRecurringRevenue(id, item.projectId, amount, frequency, description, item.active, startDate || null);
+      const resolvedEnd = endDate === undefined ? (item.endDate ?? null) : (endDate || null);
+      await dbUpdateRecurringRevenue(id, item.projectId, amount, frequency, description, item.active, startDate || null, resolvedEnd);
       await refreshData();
       toast.success("Recurring revenue updated");
       setModal(null);
@@ -644,10 +797,10 @@ export default function App() {
     }
   };
 
-  const addRecurringExpense = async (projectId, amount, frequency, description, startDate) => {
+  const addRecurringExpense = async (projectId, amount, frequency, description, startDate, endDate) => {
     setLoading(true);
     try {
-      await dbAddRecurringExpense(projectId, amount, frequency, description, startDate);
+      await dbAddRecurringExpense(projectId, amount, frequency, description, startDate, endDate);
       await refreshData();
       toast.success(`Recurring expense "${description}" added`);
       setModal(null);
@@ -678,7 +831,7 @@ export default function App() {
     setLoading(true);
     try {
       const item = recurringExpenses.find((r) => r.id === id);
-      await dbUpdateRecurringExpense(id, item.projectId, item.amount, item.frequency, item.description, !currentActive);
+      await dbUpdateRecurringExpense(id, item.projectId, item.amount, item.frequency, item.description, !currentActive, item.startDate ?? null, item.endDate ?? null);
       await refreshData();
       toast.success(`Recurring expense ${!currentActive ? "activated" : "paused"}`);
     } catch (error) {
@@ -688,11 +841,12 @@ export default function App() {
     }
   };
 
-  const editRecurringExpense = async (id, amount, frequency, description, startDate) => {
+  const editRecurringExpense = async (id, amount, frequency, description, startDate, endDate) => {
     setLoading(true);
     try {
       const item = recurringExpenses.find((r) => r.id === id);
-      await dbUpdateRecurringExpense(id, item.projectId, amount, frequency, description, item.active, startDate || null);
+      const resolvedEnd = endDate === undefined ? (item.endDate ?? null) : (endDate || null);
+      await dbUpdateRecurringExpense(id, item.projectId, amount, frequency, description, item.active, startDate || null, resolvedEnd);
       await refreshData();
       toast.success("Recurring expense updated");
       setModal(null);
@@ -701,6 +855,82 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // --- Partner Dividends (bank-funded payouts) ---
+  const addPartnerDividend = async (partnerName, amount, date, note) => {
+    setLoading(true);
+    try {
+      await dbAddPartnerDividend(partnerName, amount, date, note);
+      await refreshData();
+      toast.success(`Dividend of ${currency(amount)} paid to ${partnerName === "suhaib" ? "Suhaib" : "Mohammed"}`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to record dividend: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deletePartnerDividend = (id, amount) => {
+    showConfirm("Delete Dividend", `Delete this dividend of ${currency(amount)}?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeletePartnerDividend(id);
+        await refreshData();
+        toast.success("Dividend deleted");
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete dividend: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
+  };
+
+  // --- Domains ---
+  const addDomain = async (name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) => {
+    setLoading(true);
+    try {
+      await dbAddDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes);
+      await refreshData();
+      toast.success(`Domain "${name}" added`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to add domain: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const editDomain = async (id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) => {
+    setLoading(true);
+    try {
+      await dbUpdateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes);
+      await refreshData();
+      toast.success(`Domain "${name}" updated`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to update domain: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteDomain = (id, name) => {
+    showConfirm("Delete Domain", `Delete domain "${name}"?`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeleteDomain(id);
+        await refreshData();
+        toast.success("Domain deleted");
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete domain: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
   };
 
   const toggleRecurringRevPayment = async (recurringItem, periodDate, existingPayment) => {
@@ -752,19 +982,23 @@ export default function App() {
     const [touched, setTouched] = useState({});
 
     const set = (name, val) => {
-      setValues((v) => ({ ...v, [name]: val }));
+      const normalized = val === "__none__" ? "" : val;
+      setValues((v) => ({ ...v, [name]: normalized }));
       if (errors[name]) setErrors((e) => ({ ...e, [name]: null }));
     };
 
     const validate = () => {
       const errs = {};
       fields.forEach((f) => {
-        if (f.required && !values[f.name]) {
+        if (f.required && !values[f.name] && values[f.name] !== "0") {
           errs[f.name] = `${f.label} is required`;
         }
-        if (f.type === "number" && values[f.name]) {
+        if (f.type === "number" && values[f.name] !== "" && values[f.name] !== undefined) {
           const num = parseFloat(values[f.name]);
-          if (isNaN(num) || num <= 0) errs[f.name] = "Must be a positive number";
+          if (isNaN(num)) errs[f.name] = "Must be a number";
+          else if (f.allowZero ? num < 0 : num <= 0) {
+            errs[f.name] = f.allowZero ? "Must be 0 or greater" : "Must be a positive number";
+          }
         }
       });
       return errs;
@@ -816,6 +1050,17 @@ export default function App() {
                       })}
                     </SelectContent>
                   </Select>
+                ) : f.type === "checkbox" ? (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      id={f.name}
+                      type="checkbox"
+                      checked={values[f.name] === true || values[f.name] === "true"}
+                      onChange={(e) => set(f.name, e.target.checked)}
+                      className="h-4 w-4 rounded border-input"
+                    />
+                    <span className="text-muted-foreground">{f.checkboxLabel || "Enabled"}</span>
+                  </label>
                 ) : (
                   <Input
                     id={f.name}
@@ -825,6 +1070,7 @@ export default function App() {
                     onBlur={() => handleBlur(f.name)}
                     placeholder={f.placeholder}
                     step={f.type === "number" ? "0.001" : undefined}
+                    min={f.type === "number" && f.allowZero ? 0 : undefined}
                     className={cn(errors[f.name] && touched[f.name] && "border-red-500 ring-red-500/20 ring-2")}
                   />
                 )}
@@ -855,6 +1101,7 @@ export default function App() {
     { key: "bank", label: "Bank Savings", icon: Landmark },
     { key: "budgets", label: "Budgets", icon: Target, count: budgets.length },
     { key: "recurring", label: "Recurring", icon: Repeat },
+    { key: "domains", label: "Domains", icon: Globe, count: domains.length },
     { key: "reports", label: "Reports", icon: FileBarChart },
     { key: "secretInvestment", label: "Secret Investment", icon: PiggyBank },
   ];
@@ -926,6 +1173,57 @@ export default function App() {
 
   // ==================== VIEWS ====================
 
+  // --- Expiry Alerts Banner ---
+  function ExpiryAlertsBanner({ alerts }) {
+    return (
+      <Card className="border-amber-300/70 bg-gradient-to-br from-amber-50 to-orange-50">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-200 text-amber-700">
+                <Clock className="h-5 w-5" />
+              </div>
+              <div>
+                <CardTitle className="text-base">Upcoming Expiries</CardTitle>
+                <CardDescription>{alerts.length} item{alerts.length !== 1 ? "s" : ""} need{alerts.length === 1 ? "s" : ""} renewal · adding a successor dismisses the alert</CardDescription>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setView("domains")}>
+              <Globe className="mr-1.5 h-3.5 w-3.5" /> Manage Domains
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {alerts.map((a) => {
+              const sevColor =
+                a.severity === "overdue" ? "border-red-300 bg-red-50" :
+                a.severity === "urgent" ? "border-orange-300 bg-orange-50" :
+                "border-amber-200 bg-amber-50";
+              const sevText =
+                a.severity === "overdue" ? "text-red-700" :
+                a.severity === "urgent" ? "text-orange-700" :
+                "text-amber-700";
+              return (
+                <div key={`${a.kind}-${a.id}`} className={cn("rounded-lg border p-3 space-y-1.5", sevColor)}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {a.kind === "domain" ? <Globe className="h-3.5 w-3.5 text-muted-foreground" /> : <Repeat className="h-3.5 w-3.5 text-muted-foreground" />}
+                      <p className="font-semibold text-sm truncate">{a.title}</p>
+                    </div>
+                    <Badge className={cn("text-[10px]", sevColor, sevText)}>{formatExpiryDistance(a.days)}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">{a.subtitle}</p>
+                  <p className="text-xs"><span className="text-muted-foreground">Expires </span><span className="font-medium">{formatDate(a.date)}</span></p>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   // --- Dashboard ---
   function DashboardView() {
     return (
@@ -935,23 +1233,32 @@ export default function App() {
           <p className="text-sm text-muted-foreground">Overview of all project finances</p>
         </div>
 
+        {expiryAlerts.length > 0 && <ExpiryAlertsBanner alerts={expiryAlerts} />}
+
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={DollarSign} label="Revenue Received" value={currency(globalRevenue)} sub={`Year potential: ${currency(globalPotential)}`} variant="income" />
-          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" />
-          <StatCard icon={TrendingUp} label="Net Profit" value={currency(globalProfit)} variant={globalProfit >= 0 ? "income" : "expense"} />
-          <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="bank" />
+          <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`Contract: ${currency(globalContractRevenue)} · Recurring: ${currency(recurringRevenueIncome.total)}`} variant="income" />
+          <StatCard icon={TrendingDown} label="Operating Outflow" value={currency(operatingOutflow)} variant="expense" sub="Costs only (excl. partner payouts)" />
+          <StatCard icon={Percent} label="Operating Margin" value={`${globalMargin.toFixed(1)}%`} variant={globalMargin >= 25 ? "income" : globalMargin >= 0 ? "highlight" : "expense"} sub={`Operating net: ${currency(operatingNet)}`} />
+          <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="bank" sub={totalDistributions > 0 ? `After ${currency(totalDistributions)} paid to partners` : undefined} />
         </div>
 
-        {globalProfit > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={Wallet} label="Bank Spendable" value={currency(bankSpendable)} variant={bankSpendable >= 0 ? "bank" : "expense"} sub="Pool for ops + dividends" onClick={() => setView("bank")} />
+          <StatCard icon={Repeat} label="Recurring Revenue" value={currency(recurringRevenueIncome.total)} variant="income" sub={`Tagged: ${currency(recurringRevenueIncome.projectLinkedPaid)} · General: ${currency(recurringRevenueIncome.generalActive)}`} onClick={() => setView("recurring")} />
+          <StatCard icon={TrendingUp} label="Project Profit" value={currency(globalProjectProfit)} variant={globalProjectProfit >= 0 ? "income" : "expense"} sub="Contract + tagged recurring − costs" onClick={() => setView("projects")} />
+          <StatCard icon={CircleDollarSign} label="Year Potential" value={currency(globalPotential)} variant="default" sub="Contract + recurring to Dec" />
+        </div>
+
+        {globalProjectProfit > 0 && (
           <Card>
             <CardHeader className="pb-4">
-              <CardTitle className="text-base">Profit Distribution</CardTitle>
-              <CardDescription>Split per project: Bank 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%</CardDescription>
+              <CardTitle className="text-base">Project Profit Distribution</CardTitle>
+              <CardDescription>Bank 55% · Suhaib 10% · Mohammed 10% · Secret Investment 25% (recurring revenue is separate — it flows to the bank pool)</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                  { label: "Bank Savings", value: globalBank.income, color: "bg-indigo-500", bg: "bg-indigo-50" },
+                  { label: "Bank Share", value: globalBank.projectShare, color: "bg-indigo-500", bg: "bg-indigo-50" },
                   { label: "Suhaib", value: globalSuhaib, color: "bg-amber-500", bg: "bg-amber-50" },
                   { label: "Mohammed", value: globalMohammed, color: "bg-violet-500", bg: "bg-violet-50" },
                   { label: "Secret Investment", value: globalSecretInvestment.income, color: "bg-pink-500", bg: "bg-pink-50" },
@@ -969,32 +1276,37 @@ export default function App() {
           </Card>
         )}
 
-        {globalProfit > 0 && (
-          <Card>
-            <CardHeader className="pb-4">
-              <CardTitle className="text-base">Partner Balances</CardTitle>
-              <CardDescription>Track withdrawals from partner shares</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                {[
-                  { name: "Suhaib", partner: "suhaib", available: suhaibAvailable, earned: globalSuhaib, withdrawn: suhaibWithdrawn, variant: "partner1", icon: Users },
-                  { name: "Mohammed", partner: "mohammed", available: mohammedAvailable, earned: globalMohammed, withdrawn: mohammedWithdrawn, variant: "partner2", icon: Users },
-                ].map((p) => (
-                  <Card key={p.name} className={cn(p.variant === "partner1" ? "border-amber-200/60" : "border-violet-200/60")}>
-                    <CardContent className="p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", p.variant === "partner1" ? "bg-amber-100 text-amber-600" : "bg-violet-100 text-violet-600")}>
-                            <p.icon className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <p className="font-semibold">{p.name}</p>
-                            <p className="text-xs text-muted-foreground">Earned: {currency(p.earned)}</p>
-                          </div>
+        <Card>
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">Partner Balances</CardTitle>
+            <CardDescription>Each partner has two pots: their 10% share of project profit, and bank-funded dividend payouts</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              {[
+                { name: "Suhaib", partner: "suhaib", available: suhaibAvailable, earned: globalSuhaib, withdrawn: suhaibWithdrawn, dividends: suhaibDividendsTotal, variant: "partner1", icon: Users },
+                { name: "Mohammed", partner: "mohammed", available: mohammedAvailable, earned: globalMohammed, withdrawn: mohammedWithdrawn, dividends: mohammedDividendsTotal, variant: "partner2", icon: Users },
+              ].map((p) => (
+                <Card key={p.name} className={cn(p.variant === "partner1" ? "border-amber-200/60" : "border-violet-200/60")}>
+                  <CardContent className="p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", p.variant === "partner1" ? "bg-amber-100 text-amber-600" : "bg-violet-100 text-violet-600")}>
+                          <p.icon className="h-5 w-5" />
                         </div>
-                        <Button size="sm" onClick={() => setModal({
-                          title: `Withdraw — ${p.name}`,
+                        <div>
+                          <p className="font-semibold">{p.name}</p>
+                          <p className="text-xs text-muted-foreground">Total received: {currency(p.withdrawn + p.dividends)}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg border p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">10% Share</p>
+                        <p className="text-base font-bold tabular-nums">{currency(p.available)}</p>
+                        <p className="text-[11px] text-muted-foreground">Earned {currency(p.earned)} · Withdrawn {currency(p.withdrawn)}</p>
+                        <Button size="sm" variant="outline" className="mt-2 w-full h-7 text-xs" disabled={p.available <= 0} onClick={() => setModal({
+                          title: `Withdraw Share — ${p.name}`,
                           fields: [
                             { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
                             { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
@@ -1002,53 +1314,77 @@ export default function App() {
                           ],
                           onSubmit: (v) => addPartnerWithdrawal(p.partner, parseFloat(v.amount), v.date, v.note),
                         })}>
-                          <Wallet className="mr-1.5 h-3.5 w-3.5" /> Withdraw
+                          <Wallet className="mr-1.5 h-3 w-3" /> Withdraw Share
                         </Button>
                       </div>
-                      <div className="flex items-baseline justify-between">
-                        <span className="text-2xl font-bold tabular-nums">{currency(p.available)}</span>
-                        <span className="text-xs text-muted-foreground">Withdrawn: {currency(p.withdrawn)}</span>
+                      <div className="rounded-lg border p-3 bg-emerald-50/40 border-emerald-200/60">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700 mb-1">Bank Dividend</p>
+                        <p className="text-base font-bold tabular-nums text-emerald-700">{currency(p.dividends)}</p>
+                        <p className="text-[11px] text-muted-foreground">From bank spendable pool</p>
+                        <Button size="sm" className="mt-2 w-full h-7 text-xs bg-emerald-600 hover:bg-emerald-700" disabled={bankSpendable <= 0} onClick={() => setModal({
+                          title: `Pay Dividend — ${p.name}`,
+                          fields: [
+                            { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                            { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                            { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
+                          ],
+                          onSubmit: (v) => addPartnerDividend(p.partner, parseFloat(v.amount), v.date, v.note),
+                        })}>
+                          <BadgeDollarSign className="mr-1.5 h-3 w-3" /> Pay Dividend
+                        </Button>
                       </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-              {partnerWithdrawals.length > 0 && (
-                <div>
-                  <p className="text-sm font-semibold mb-3">Recent Withdrawals</p>
-                  <div className="rounded-lg border overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted/50">
-                          <TableHead>Partner</TableHead>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Note</TableHead>
-                          <TableHead className="w-10" />
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {[...partnerWithdrawals].reverse().map((w) => (
-                          <TableRow key={w.id}>
-                            <TableCell className="font-medium">{w.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
-                            <TableCell className="text-muted-foreground">{formatDate(w.date)}</TableCell>
-                            <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(w.amount)}</Badge></TableCell>
-                            <TableCell className="text-muted-foreground">{w.note || "-"}</TableCell>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            {(partnerWithdrawals.length > 0 || partnerDividends.length > 0) && (
+              <div>
+                <p className="text-sm font-semibold mb-3">Recent Activity</p>
+                <div className="rounded-lg border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/50">
+                        <TableHead>Type</TableHead>
+                        <TableHead>Partner</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Note</TableHead>
+                        <TableHead className="w-10" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {[
+                        ...partnerWithdrawals.map((w) => ({ ...w, kind: "withdrawal" })),
+                        ...partnerDividends.map((d) => ({ ...d, kind: "dividend" })),
+                      ]
+                        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+                        .slice(0, 8)
+                        .map((row) => (
+                          <TableRow key={`${row.kind}-${row.id}`}>
                             <TableCell>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePartnerWithdrawal(w.id, w.amount)}>
+                              <Badge variant={row.kind === "dividend" ? "default" : "secondary"} className={cn(row.kind === "dividend" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" : "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                                {row.kind === "dividend" ? "Dividend" : "Share"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-medium">{row.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
+                            <TableCell className="text-muted-foreground">{formatDate(row.date)}</TableCell>
+                            <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(row.amount)}</Badge></TableCell>
+                            <TableCell className="text-muted-foreground">{row.note || "-"}</TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => row.kind === "dividend" ? deletePartnerDividend(row.id, row.amount) : deletePartnerWithdrawal(row.id, row.amount)}>
                                 <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             </TableCell>
                           </TableRow>
                         ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                    </TableBody>
+                  </Table>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {(budgets.length > 0 || recurringRevenue.length > 0 || recurringExpenses.length > 0) && (
           <Card>
@@ -1090,7 +1426,7 @@ export default function App() {
           <CardContent>
             {projectStats.length === 0 ? (
               <EmptyState icon={FolderKanban} title="No projects yet" description="Create your first project to start tracking finances." action={
-                <Button onClick={() => { setView("projects"); setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000", required: true }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) }); }}>
+                <Button onClick={() => { setView("projects"); setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000 (use 0 for free + recurring upsell)", required: true, allowZero: true, default: "0" }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) }); }}>
                   <Plus className="mr-1.5 h-4 w-4" /> New Project
                 </Button>
               } />
@@ -1111,14 +1447,21 @@ export default function App() {
                   <TableBody>
                     {projectStats.slice().reverse().map((p) => (
                       <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openProject(p.id)}>
-                        <TableCell className="font-semibold">{p.name}</TableCell>
-                        <TableCell className="tabular-nums">{currency(p.totalValue)}</TableCell>
-                        <TableCell className="tabular-nums text-emerald-600">{currency(p.totalPaid)}</TableCell>
+                        <TableCell className="font-semibold">{p.name}{p.totalValue === 0 && <Badge className="ml-2 bg-emerald-100 text-emerald-700 hover:bg-emerald-100 text-[10px]">Free</Badge>}</TableCell>
+                        <TableCell className="tabular-nums">{p.totalValue === 0 ? "Free" : currency(p.totalValue)}</TableCell>
+                        <TableCell className="tabular-nums text-emerald-600">
+                          <div>{currency(p.totalPaid)}</div>
+                          {p.projRecurringPaid > 0 && (
+                            <div className="text-[10px] font-normal text-muted-foreground">
+                              Contract {currency(p.contractPayments)} + Recurring {currency(p.projRecurringPaid)}
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="tabular-nums">{currency(p.totalExpenses)}</TableCell>
                         <TableCell className={cn("font-semibold tabular-nums", p.profit >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(p.profit)}</TableCell>
                         <TableCell>
-                          <Badge variant={p.unpaid <= 0 ? "default" : p.totalPaid > 0 ? "secondary" : "outline"} className={cn(p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.totalPaid > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
-                            {p.unpaid <= 0 ? "Paid" : p.totalPaid > 0 ? "Partial" : "Unpaid"}
+                          <Badge variant={p.unpaid <= 0 ? "default" : p.contractPayments > 0 ? "secondary" : "outline"} className={cn(p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.contractPayments > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                            {p.unpaid <= 0 ? "Paid" : p.contractPayments > 0 ? "Partial" : "Unpaid"}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -1138,22 +1481,22 @@ export default function App() {
 
   // --- Projects List ---
   function ProjectsView() {
-    const totPaid = projectStats.reduce((a, p) => a + p.totalPaid, 0);
+    const totContractPaid = projectStats.reduce((a, p) => a + p.contractPayments, 0);
+    const totRecurringPaid = projectStats.reduce((a, p) => a + p.projRecurringPaid, 0);
+    const totPaid = totContractPaid + totRecurringPaid;
     const totUnpaid = projectStats.reduce((a, p) => a + p.unpaid, 0);
     const totExp = projectStats.reduce((a, p) => a + p.totalExpenses, 0);
     const totProfit = projectStats.reduce((a, p) => a + p.profit, 0);
-    const totRevenue = projectStats.reduce((a, p) => a + p.totalRevenue, 0);
-    const totPotential = projectStats.reduce((a, p) => a + p.totalPotential, 0);
-    const margin = totRevenue > 0 ? (totProfit / totRevenue) * 100 : 0;
-    const marginColor = margin >= 50 ? "text-emerald-600" : margin >= 25 ? "text-amber-600" : "text-red-500";
-    const marginBg = margin >= 50 ? "bg-emerald-50" : margin >= 25 ? "bg-amber-50" : "bg-red-50";
+    const margin = globalMargin;
+    const marginColor = margin >= 50 ? "text-emerald-600" : margin >= 25 ? "text-amber-600" : margin >= 0 ? "text-orange-500" : "text-red-500";
+    const marginBg = margin >= 50 ? "bg-emerald-50" : margin >= 25 ? "bg-amber-50" : margin >= 0 ? "bg-orange-50" : "bg-red-50";
     const summaryStats = [
-      { label: "Total Paid", value: currency(totPaid), icon: ArrowUpRight, color: "text-emerald-600", bg: "bg-emerald-50" },
+      { label: "Total Paid", value: currency(totPaid), icon: ArrowUpRight, color: "text-emerald-600", bg: "bg-emerald-50", sub: totRecurringPaid > 0 ? `Contract ${currency(totContractPaid)} + Recurring ${currency(totRecurringPaid)}` : null },
       { label: "Total Unpaid", value: currency(totUnpaid), icon: ArrowDownRight, color: "text-red-500", bg: "bg-red-50" },
       { label: "Total Expenses", value: currency(totExp), icon: TrendingDown, color: "text-orange-500", bg: "bg-orange-50" },
-      { label: "Total Profit", value: currency(totProfit), icon: TrendingUp, color: totProfit >= 0 ? "text-emerald-600" : "text-red-500", bg: totProfit >= 0 ? "bg-emerald-50" : "bg-red-50" },
-      { label: "Margin", value: `${margin.toFixed(1)}%`, icon: Percent, color: marginColor, bg: marginBg },
-      { label: "Total Potential", value: currency(totPotential), icon: CircleDollarSign, color: "text-indigo-600", bg: "bg-indigo-50" },
+      { label: "Project Profit", value: currency(totProfit), icon: TrendingUp, color: totProfit >= 0 ? "text-emerald-600" : "text-red-500", bg: totProfit >= 0 ? "bg-emerald-50" : "bg-red-50" },
+      { label: "Operating Margin", value: `${margin.toFixed(1)}%`, icon: Percent, color: marginColor, bg: marginBg },
+      { label: "In Bank", value: currency(totalPhysicalBank), icon: Landmark, color: totalPhysicalBank >= 0 ? "text-indigo-600" : "text-red-500", bg: totalPhysicalBank >= 0 ? "bg-indigo-50" : "bg-red-50" },
     ];
 
     return (
@@ -1163,7 +1506,7 @@ export default function App() {
             <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
             <p className="text-sm text-muted-foreground">{projects.length} project{projects.length !== 1 ? "s" : ""} total</p>
           </div>
-          <Button onClick={() => setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000", required: true }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) })}>
+          <Button onClick={() => setModal({ title: "New Project", fields: [{ name: "name", label: "Project Name", placeholder: "e.g. Website Redesign", required: true }, { name: "totalValue", label: "Total Project Value (BHD)", type: "number", placeholder: "0.000 (use 0 for free + recurring upsell)", required: true, allowZero: true, default: "0" }], onSubmit: (v) => addProject(v.name, parseFloat(v.totalValue)) })}>
             <Plus className="mr-1.5 h-4 w-4" /> New Project
           </Button>
         </div>
@@ -1179,6 +1522,7 @@ export default function App() {
                   <div className="min-w-0">
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground leading-tight mb-0.5">{s.label}</p>
                     <p className={cn("text-sm font-bold tabular-nums truncate", s.color)}>{s.value}</p>
+                    {s.sub && <p className="text-[10px] text-muted-foreground truncate">{s.sub}</p>}
                   </div>
                 </div>
               ))}
@@ -1193,29 +1537,34 @@ export default function App() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {projectStats.slice().reverse().map((p) => {
-              const paidPct = p.totalPotential > 0 ? Math.min(100, (p.totalPaid / p.totalPotential) * 100) : 0;
+              const isFree = p.totalValue === 0;
+              // Progress bar tracks contract completion (recurring is ongoing/extra)
+              const paidPct = isFree ? 100 : p.totalValue > 0 ? Math.min(100, (p.contractPayments / p.totalValue) * 100) : 0;
               return (
                 <Card key={p.id} className="cursor-pointer transition-all hover:shadow-lg hover:-translate-y-1" onClick={() => openProject(p.id)}>
                   <CardContent className="p-0">
                     <div className="p-5 pb-4">
                       <div className="flex items-start justify-between gap-2 mb-1">
                         <h3 className="font-semibold text-base">{p.name}</h3>
-                        <Badge variant={p.unpaid <= 0 ? "default" : p.totalPaid > 0 ? "secondary" : "outline"} className={cn("shrink-0", p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.totalPaid > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
-                          {p.unpaid <= 0 ? "Paid" : p.totalPaid > 0 ? "Partial" : "Unpaid"}
+                        <Badge variant={p.unpaid <= 0 ? "default" : p.contractPayments > 0 ? "secondary" : "outline"} className={cn("shrink-0", p.unpaid <= 0 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", p.contractPayments > 0 && p.unpaid > 0 && "bg-amber-100 text-amber-700 hover:bg-amber-100")}>
+                          {isFree ? "Free" : p.unpaid <= 0 ? "Paid" : p.contractPayments > 0 ? "Partial" : "Unpaid"}
                         </Badge>
                       </div>
-                      <p className="text-2xl font-bold tabular-nums tracking-tight">{currency(p.totalValue)}</p>
+                      <p className="text-2xl font-bold tabular-nums tracking-tight">{isFree ? "Free" : currency(p.totalValue)}</p>
+                      {p.projRecurringPaid > 0 && (
+                        <p className="text-xs text-emerald-600 mt-1">+ {currency(p.projRecurringPaid)} from recurring</p>
+                      )}
                     </div>
                     <div className="px-5 pb-4">
                       <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
-                        <span>Payment Progress</span>
+                        <span>Contract Progress</span>
                         <span className="font-semibold">{Math.round(paidPct)}%</span>
                       </div>
                       <Progress value={paidPct} className="h-2" />
                     </div>
                     <div className="grid grid-cols-2 border-t">
                       {[
-                        { label: "Paid", value: currency(p.totalPaid), color: "text-emerald-600" },
+                        { label: "Paid", value: currency(p.totalPaid), color: "text-emerald-600", sub: p.projRecurringPaid > 0 ? `incl. ${currency(p.projRecurringPaid)} recurring` : null },
                         { label: "Unpaid", value: currency(p.unpaid), color: "text-red-500" },
                         { label: "Expenses", value: currency(p.totalExpenses), color: "" },
                         { label: "Profit", value: currency(p.profit), color: p.profit >= 0 ? "text-emerald-600" : "text-red-500" },
@@ -1223,6 +1572,7 @@ export default function App() {
                         <div key={s.label} className="border-b border-r last:border-r-0 [&:nth-child(2)]:border-r-0 p-3">
                           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
                           <p className={cn("text-sm font-semibold tabular-nums", s.color)}>{s.value}</p>
+                          {s.sub && <p className="text-[10px] text-muted-foreground mt-0.5">{s.sub}</p>}
                         </div>
                       ))}
                     </div>
@@ -1248,7 +1598,8 @@ export default function App() {
   function ProjectDetailView() {
     if (!selectedProject) return <EmptyState icon={FolderKanban} title="Project not found" description="The selected project could not be found." />;
     const p = selectedProject;
-    const paidPct = p.totalPotential > 0 ? Math.min(100, (p.totalPaid / p.totalPotential) * 100) : 0;
+    const isFree = p.totalValue === 0;
+    const paidPct = isFree ? 100 : p.totalValue > 0 ? Math.min(100, (p.contractPayments / p.totalValue) * 100) : 0;
     const projLinkedRev = recurringRevenue.filter((r) => r.active && r.projectId === p.id);
     const projLinkedExp = recurringExpenses.filter((r) => r.active && r.projectId === p.id);
     return (
@@ -1258,11 +1609,17 @@ export default function App() {
         </Button>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">{p.name}</h1>
-            <p className="text-sm text-muted-foreground">Contract: {currency(p.totalValue)}{projLinkedRev.length > 0 ? ` · ${projLinkedRev.length} recurring stream${projLinkedRev.length !== 1 ? "s" : ""}` : ""}</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              {p.name}
+              {isFree && <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">Free + Recurring</Badge>}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Contract: {isFree ? "Free" : currency(p.totalValue)}
+              {projLinkedRev.length > 0 ? ` · ${projLinkedRev.length} recurring stream${projLinkedRev.length !== 1 ? "s" : ""}` : ""}
+            </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setModal({ title: "Edit Project", fields: [{ name: "name", label: "Project Name", default: p.name, required: true }, { name: "totalValue", label: "Total Value (BHD)", type: "number", default: String(p.totalValue), required: true }], onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)) })}>
+            <Button variant="outline" size="sm" onClick={() => setModal({ title: "Edit Project", fields: [{ name: "name", label: "Project Name", default: p.name, required: true }, { name: "totalValue", label: "Total Value (BHD)", type: "number", default: String(p.totalValue), required: true, allowZero: true }], onSubmit: (v) => editProject(p.id, v.name, parseFloat(v.totalValue)) })}>
               <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
             </Button>
             <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => deleteProject(p.id, p.name)}>
@@ -1272,10 +1629,10 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={CircleDollarSign} label="Total Potential" value={currency(p.totalPotential)} variant="highlight" sub={`Contract ${currency(p.totalValue)}`} />
-          <StatCard icon={ArrowUpRight} label="Paid" value={currency(p.totalPaid)} variant="income" sub={`${Math.round(paidPct)}% of potential`} />
-          <StatCard icon={ArrowDownRight} label="Unpaid" value={currency(p.unpaid)} variant="expense" sub={p.recurringPending > 0 ? `${currency(p.recurringPending)} recurring pending` : undefined} />
-          <StatCard icon={TrendingUp} label="Net Profit" value={currency(p.profit)} variant={p.profit >= 0 ? "income" : "expense"} />
+          <StatCard icon={CircleDollarSign} label="Contract Value" value={isFree ? "Free" : currency(p.totalValue)} variant="highlight" sub={projLinkedRev.length > 0 ? `+ ${currency(p.projRecurringPaid)} earned from recurring` : "No recurring streams"} />
+          <StatCard icon={ArrowUpRight} label="Total Paid" value={currency(p.totalPaid)} variant="income" sub={p.projRecurringPaid > 0 ? `Contract ${currency(p.contractPayments)} + Recurring ${currency(p.projRecurringPaid)}` : `${Math.round(paidPct)}% of contract`} />
+          <StatCard icon={ArrowDownRight} label="Unpaid" value={currency(p.unpaid)} variant={p.unpaid > 0 ? "expense" : "default"} sub={isFree ? "No contract value" : "Contract only"} />
+          <StatCard icon={TrendingUp} label="Net Profit" value={currency(p.profit)} variant={p.profit >= 0 ? "income" : "expense"} sub="Revenue (incl. recurring) − costs" />
         </div>
 
         {p.profit > 0 && (
@@ -1391,7 +1748,19 @@ export default function App() {
                 <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-emerald-600" /> Recurring Revenue</CardTitle>
                 <CardDescription>{projLinkedRev.length > 0 ? `${projLinkedRev.length} stream${projLinkedRev.length !== 1 ? "s" : ""} · mark each period as received` : "Add recurring revenue streams for this project"}</CardDescription>
               </div>
-              <Button size="sm" onClick={() => setModal({ title: "Add Recurring Revenue", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "startDate", label: "Start Date (optional)", type: "date" }], onSubmit: (v) => addRecurringRevenue(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+              <Button size="sm" onClick={() => setModal({
+                title: "Add Recurring Revenue",
+                fields: [
+                  { name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true },
+                  { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                  { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                  { name: "startDate", label: "Start Date (optional)", type: "date" },
+                  { name: "endDate", label: "End Date (optional, triggers expiry alert)", type: "date" },
+                  { name: "domainName", label: "Add Domain? (optional)", placeholder: "e.g. example.com" },
+                  { name: "domainExpiry", label: "Domain Expiry Date", type: "date" },
+                ],
+                onSubmit: (v) => addRecurringRevenue(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null, v.domainName || null, v.domainExpiry || null),
+              })}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
               </Button>
             </div>
@@ -1426,7 +1795,17 @@ export default function App() {
                             <p className="text-sm font-bold tabular-nums text-emerald-600">{currency(paidAmount)}</p>
                             <p className="text-xs text-muted-foreground">{paidItems.length}/{periods.length} paid</p>
                           </div>}
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({ title: "Edit Recurring Revenue", fields: [{ name: "description", label: "Description", default: r.description, required: true }, { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true }, { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" }], onSubmit: (v) => editRecurringRevenue(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({
+                            title: "Edit Recurring Revenue",
+                            fields: [
+                              { name: "description", label: "Description", default: r.description, required: true },
+                              { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true },
+                              { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true },
+                              { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" },
+                              { name: "endDate", label: "End Date (optional)", type: "date", default: r.endDate || "" },
+                            ],
+                            onSubmit: (v) => editRecurringRevenue(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null),
+                          })}>
                             <Pencil className="h-3 w-3" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringRevenue(r.id, r.description)}>
@@ -1480,7 +1859,17 @@ export default function App() {
                 <CardTitle className="text-base flex items-center gap-2"><Repeat className="h-4 w-4 text-orange-500" /> Recurring Expenses</CardTitle>
                 <CardDescription>{projLinkedExp.length > 0 ? `${projLinkedExp.length} stream${projLinkedExp.length !== 1 ? "s" : ""} · track which periods have been paid out` : "Add recurring expense streams for this project"}</CardDescription>
               </div>
-              <Button size="sm" variant="outline" onClick={() => setModal({ title: "Add Recurring Expense", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly hosting", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "startDate", label: "Start Date (optional)", type: "date" }], onSubmit: (v) => addRecurringExpense(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+              <Button size="sm" variant="outline" onClick={() => setModal({
+                title: "Add Recurring Expense",
+                fields: [
+                  { name: "description", label: "Description", placeholder: "e.g. Monthly hosting", required: true },
+                  { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                  { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                  { name: "startDate", label: "Start Date (optional)", type: "date" },
+                  { name: "endDate", label: "End Date (optional)", type: "date" },
+                ],
+                onSubmit: (v) => addRecurringExpense(p.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null),
+              })}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
               </Button>
             </div>
@@ -1515,7 +1904,17 @@ export default function App() {
                             <p className="text-sm font-bold tabular-nums text-orange-500">{currency(paidAmount)}</p>
                             <p className="text-xs text-muted-foreground">{paidItems.length}/{periods.length} paid</p>
                           </div>}
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({ title: "Edit Recurring Expense", fields: [{ name: "description", label: "Description", default: r.description, required: true }, { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true }, { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" }], onSubmit: (v) => editRecurringExpense(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null) })}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setModal({
+                            title: "Edit Recurring Expense",
+                            fields: [
+                              { name: "description", label: "Description", default: r.description, required: true },
+                              { name: "amount", label: "Amount (BHD)", type: "number", default: String(r.amount), required: true },
+                              { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: r.frequency, required: true },
+                              { name: "startDate", label: "Start Date (optional)", type: "date", default: r.startDate || "" },
+                              { name: "endDate", label: "End Date (optional)", type: "date", default: r.endDate || "" },
+                            ],
+                            onSubmit: (v) => editRecurringExpense(r.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null),
+                          })}>
                             <Pencil className="h-3 w-3" />
                           </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringExpense(r.id, r.description)}>
@@ -1568,37 +1967,102 @@ export default function App() {
   function BankView() {
     return (
       <div className="animate-fade-in-up space-y-6">
-        <div><h1 className="text-2xl font-bold tracking-tight">Bank Savings</h1><p className="text-sm text-muted-foreground">55% of all project profits go to bank savings</p></div>
+        <div><h1 className="text-2xl font-bold tracking-tight">Bank Savings</h1><p className="text-sm text-muted-foreground">Pool funded by 55% of project profit + 100% of recurring revenue. Funds dividends and ops.</p></div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="highlight" />
-          <StatCard icon={ArrowUpRight} label="Bank Share (55%)" value={currency(globalBank.income)} variant="income" sub="From project profits" />
-          <StatCard icon={ArrowDownRight} label="Bank Spent" value={currency(globalBank.spent)} variant="expense" sub={`${bankSpending.length} transaction${bankSpending.length !== 1 ? "s" : ""}`} />
-          <StatCard icon={Wallet} label="Bank Available" value={currency(bankSpendable)} variant="bank" sub="Share minus spending" />
+          <StatCard icon={ArrowUpRight} label="Bank Inflow" value={currency(globalBank.income)} variant="income" sub={`${currency(globalBank.projectShare)} share + ${currency(recurringRevenueIncome.total)} recurring`} />
+          <StatCard icon={ArrowDownRight} label="Bank Outflow" value={currency(globalBank.spent + totalBudgetSpent + totalDividendsPaid + generalRecurringExp)} variant="expense" sub="Spending + budgets + dividends + general recurring" />
+          <StatCard icon={Wallet} label="Bank Spendable" value={currency(bankSpendable)} variant={bankSpendable >= 0 ? "bank" : "expense"} sub="Available for ops + dividends" />
         </div>
 
         <Card>
-          <CardHeader className="pb-4"><CardTitle className="text-base">Money Allocation</CardTitle><CardDescription>How the total bank balance is distributed</CardDescription></CardHeader>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Bank Pool Composition</CardTitle><CardDescription>How inflows and outflows shape the spendable balance</CardDescription></CardHeader>
           <CardContent className="space-y-3">
             {[
-              { label: "Bank Savings (spendable)", value: bankSpendable, color: "bg-indigo-500" },
-              { label: "Suhaib (in bank)", value: suhaibAvailable, color: "bg-amber-500" },
-              { label: "Mohammed (in bank)", value: mohammedAvailable, color: "bg-violet-500" },
-              { label: "Secret Investment (in bank)", value: globalSecretInvestment.balance, color: "bg-pink-500" },
+              { label: "Project profit share (55%)", value: globalBank.projectShare, color: "bg-indigo-500", isInflow: true },
+              { label: "Recurring revenue (project paid)", value: recurringRevenueIncome.projectLinkedPaid, color: "bg-emerald-500", isInflow: true },
+              { label: "Recurring revenue (general)", value: recurringRevenueIncome.generalActive, color: "bg-emerald-400", isInflow: true },
+              { label: "Bank spending", value: -globalBank.spent, color: "bg-red-400" },
+              { label: "Budget spending", value: -totalBudgetSpent, color: "bg-orange-400" },
+              { label: "Partner dividends paid", value: -totalDividendsPaid, color: "bg-rose-400" },
+              { label: "General recurring expenses", value: -generalRecurringExp, color: "bg-amber-400" },
             ].map((item) => (
               <div key={item.label} className="flex items-center justify-between py-2">
                 <div className="flex items-center gap-3">
                   <div className={cn("h-3 w-3 rounded-full", item.color)} />
                   <span className="text-sm">{item.label}</span>
                 </div>
-                <span className="text-sm font-semibold tabular-nums">{currency(item.value)}</span>
+                <span className={cn("text-sm font-semibold tabular-nums", item.value < 0 ? "text-red-600" : item.isInflow ? "text-emerald-600" : "")}>{currency(item.value)}</span>
               </div>
             ))}
             <Separator />
             <div className="flex items-center justify-between pt-1">
-              <span className="text-sm font-bold text-primary">Total in Bank</span>
-              <span className="text-sm font-bold text-primary tabular-nums">{currency(totalPhysicalBank)}</span>
+              <span className="text-sm font-bold text-primary">Bank Spendable</span>
+              <span className={cn("text-sm font-bold tabular-nums", bankSpendable >= 0 ? "text-primary" : "text-red-600")}>{currency(bankSpendable)}</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div><CardTitle className="text-base">Partner Dividends</CardTitle><CardDescription>Bank-funded payouts to Suhaib & Mohammed (the salary mechanism)</CardDescription></div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" disabled={bankSpendable <= 0} onClick={() => setModal({
+                  title: "Pay Dividend — Suhaib",
+                  fields: [
+                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                    { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                    { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
+                  ],
+                  onSubmit: (v) => addPartnerDividend("suhaib", parseFloat(v.amount), v.date, v.note),
+                })}>
+                  <BadgeDollarSign className="mr-1.5 h-3.5 w-3.5" /> Pay Suhaib
+                </Button>
+                <Button size="sm" variant="outline" disabled={bankSpendable <= 0} onClick={() => setModal({
+                  title: "Pay Dividend — Mohammed",
+                  fields: [
+                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                    { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                    { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
+                  ],
+                  onSubmit: (v) => addPartnerDividend("mohammed", parseFloat(v.amount), v.date, v.note),
+                })}>
+                  <BadgeDollarSign className="mr-1.5 h-3.5 w-3.5" /> Pay Mohammed
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 mb-4">
+              <div className="rounded-lg border p-3"><p className="text-[11px] uppercase font-semibold text-muted-foreground">Suhaib total dividends</p><p className="text-base font-bold tabular-nums">{currency(suhaibDividendsTotal)}</p><p className="text-xs text-muted-foreground">{suhaibDividends.length} payment{suhaibDividends.length !== 1 ? "s" : ""}</p></div>
+              <div className="rounded-lg border p-3"><p className="text-[11px] uppercase font-semibold text-muted-foreground">Mohammed total dividends</p><p className="text-base font-bold tabular-nums">{currency(mohammedDividendsTotal)}</p><p className="text-xs text-muted-foreground">{mohammedDividends.length} payment{mohammedDividends.length !== 1 ? "s" : ""}</p></div>
+            </div>
+            {partnerDividends.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No dividends paid yet. Use the buttons above to record one.</p>
+            ) : (
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader><TableRow className="bg-muted/50"><TableHead>Partner</TableHead><TableHead>Date</TableHead><TableHead>Amount</TableHead><TableHead>Note</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                  <TableBody>
+                    {[...partnerDividends].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((d) => (
+                      <TableRow key={d.id}>
+                        <TableCell className="font-medium">{d.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
+                        <TableCell className="text-muted-foreground">{formatDate(d.date)}</TableCell>
+                        <TableCell><Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 tabular-nums font-semibold">{currency(d.amount)}</Badge></TableCell>
+                        <TableCell className="text-muted-foreground">{d.note || "-"}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePartnerDividend(d.id, d.amount)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1769,9 +2233,60 @@ export default function App() {
 
   // --- Recurring View ---
   function RecurringView() {
+    const activeRev = recurringRevenue.filter((r) => r.active);
+    const activeExp = recurringExpenses.filter((r) => r.active);
+
+    // Monthly run-rate: yearly items / 12, monthly items as-is
+    const monthlyRevRate = activeRev.reduce((a, r) => a + (r.frequency === "yearly" ? r.amount / 12 : r.amount), 0);
+    const monthlyExpRate = activeExp.reduce((a, r) => a + (r.frequency === "yearly" ? r.amount / 12 : r.amount), 0);
+    const netMonthlyRate = monthlyRevRate - monthlyExpRate;
+
+    // Year potential / cost (capped to current year via getYearPotentialCount)
+    const yearRevPotential = activeRev.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
+    const yearExpCost = activeExp.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
+
+    // Cash actually collected from project-linked recurring revenue
+    const totalRevCollected = recurringRevenuePayments.reduce((a, rp) => a + rp.amount, 0);
+    // Cash actually paid out on project-linked recurring expenses (period-tracked subset)
+    const totalExpPaidOut = recurringExpensePayments.reduce((a, ep) => a + ep.amount, 0);
+
+    // Accrual cost across all generated periods (matches profit calculation)
+    const accrualExpTotal = recurringExpenses.reduce(
+      (a, r) => a + (r.active ? generateRecurringPeriods(r.startDate, r.frequency).length * r.amount : 0),
+      0,
+    );
+
+    // Pending revenue: sum of active project-linked unpaid periods × amount
+    const pendingProjectRev = recurringRevenue
+      .filter((r) => r.active && r.projectId && r.startDate)
+      .reduce((a, r) => {
+        const periods = generateRecurringPeriods(r.startDate, r.frequency);
+        const paid = recurringRevenuePayments.filter((rp) => rp.recurringRevenueId === r.id).length;
+        return a + Math.max(0, periods.length - paid) * r.amount;
+      }, 0);
+
     return (
       <div className="animate-fade-in-up space-y-6">
-        <div><h1 className="text-2xl font-bold tracking-tight">Recurring</h1><p className="text-sm text-muted-foreground">{recurringRevenue.length} revenue &middot; {recurringExpenses.length} expense items</p></div>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Recurring</h1>
+            <p className="text-sm text-muted-foreground">{recurringRevenue.length} revenue &middot; {recurringExpenses.length} expense items &middot; {activeRev.length + activeExp.length} active</p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={ArrowUpRight} label="Revenue Collected" value={currency(totalRevCollected)} variant="income" sub={pendingProjectRev > 0 ? `+ ${currency(pendingProjectRev)} pending` : "All paid"} />
+          <StatCard icon={ArrowDownRight} label="Expense Cost (accrual)" value={currency(accrualExpTotal)} variant="expense" sub={totalExpPaidOut > 0 ? `${currency(totalExpPaidOut)} paid out` : "All periods counted as cost"} />
+          <StatCard icon={Repeat} label="Net Monthly Run-rate" value={currency(netMonthlyRate)} variant={netMonthlyRate >= 0 ? "income" : "expense"} sub={`${currency(monthlyRevRate)} in / ${currency(monthlyExpRate)} out`} />
+          <StatCard icon={CircleDollarSign} label="Year Potential" value={currency(yearRevPotential)} variant="highlight" sub={`Net ${currency(yearRevPotential - yearExpCost)} (year cost ${currency(yearExpCost)})`} />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Active Revenue Streams" value={String(activeRev.length)} variant={activeRev.length > 0 ? "income" : "default"} sub={`${activeRev.filter((r) => r.frequency === "monthly").length} monthly · ${activeRev.filter((r) => r.frequency === "yearly").length} yearly`} />
+          <StatCard label="Active Expense Streams" value={String(activeExp.length)} variant={activeExp.length > 0 ? "expense" : "default"} sub={`${activeExp.filter((r) => r.frequency === "monthly").length} monthly · ${activeExp.filter((r) => r.frequency === "yearly").length} yearly`} />
+          <StatCard label="Tagged to Projects" value={String(recurringRevenue.filter((r) => r.projectId).length + recurringExpenses.filter((r) => r.projectId).length)} variant="default" sub="Credited to project profit" />
+          <StatCard label="General (Untagged)" value={String(recurringRevenue.filter((r) => !r.projectId).length + recurringExpenses.filter((r) => !r.projectId).length)} variant="default" sub="Flow direct to bank" />
+        </div>
 
         <Tabs defaultValue="revenue" className="w-full">
           <TabsList className="w-full sm:w-auto">
@@ -1784,7 +2299,20 @@ export default function App() {
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">Recurring Revenue</CardTitle>
-                  <Button size="sm" onClick={() => setModal({ title: "Add Recurring Revenue", fields: [{ name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" }, { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }], onSubmit: (v) => addRecurringRevenue(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate) })}>
+                  <Button size="sm" onClick={() => setModal({
+                    title: "Add Recurring Revenue",
+                    fields: [
+                      { name: "description", label: "Description", placeholder: "e.g. Monthly retainer", required: true },
+                      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                      { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                      { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
+                      { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                      { name: "endDate", label: "End Date (optional, triggers expiry alert)", type: "date" },
+                      { name: "domainName", label: "Add Domain? (optional)", placeholder: "e.g. example.com — leave blank to skip" },
+                      { name: "domainExpiry", label: "Domain Expiry Date (only if domain set)", type: "date" },
+                    ],
+                    onSubmit: (v) => addRecurringRevenue(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate, v.endDate || null, v.domainName || null, v.domainExpiry || null),
+                  })}>
                     <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Revenue
                   </Button>
                 </div>
@@ -1796,15 +2324,26 @@ export default function App() {
                   <div className="rounded-lg border overflow-hidden">
                     <Table>
                       <TableHeader>
-                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
+                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Ends</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
                       </TableHeader>
                       <TableBody>
-                        {recurringRevenue.map((item) => (
+                        {recurringRevenue.map((item) => {
+                          const days = item.endDate ? daysUntil(item.endDate) : null;
+                          const threshold = reminderThresholdDays(item.frequency);
+                          const flagged = item.active && days !== null && days <= threshold;
+                          return (
                           <TableRow key={item.id}>
                             <TableCell className="font-medium">{item.description}</TableCell>
                             <TableCell className="text-emerald-600 tabular-nums font-semibold">{currency(item.amount)}</TableCell>
                             <TableCell><Badge variant="outline">{item.frequency}</Badge></TableCell>
                             <TableCell className="text-muted-foreground">{projects.find((p) => p.id === item.projectId)?.name || "General"}</TableCell>
+                            <TableCell>
+                              {item.endDate ? (
+                                <span className={cn("text-xs tabular-nums", flagged ? "text-red-600 font-semibold" : "text-muted-foreground")}>
+                                  {formatDate(item.endDate)}{flagged ? ` · ${formatExpiryDistance(days)}` : ""}
+                                </span>
+                              ) : <span className="text-muted-foreground text-xs">—</span>}
+                            </TableCell>
                             <TableCell>
                               <Button variant="ghost" size="sm" className={cn("h-7 text-xs", item.active ? "text-emerald-600" : "text-muted-foreground")} onClick={() => toggleRecurringRevenue(item.id, item.active)}>
                                 <Badge variant={item.active ? "default" : "secondary"} className={cn(item.active && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100")}>
@@ -1818,7 +2357,8 @@ export default function App() {
                               </Button>
                             </TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
@@ -1832,7 +2372,18 @@ export default function App() {
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">Recurring Expenses</CardTitle>
-                  <Button size="sm" onClick={() => setModal({ title: "Add Recurring Expense", fields: [{ name: "description", label: "Description", placeholder: "e.g. Office rent", required: true }, { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true }, { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true }, { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" }, { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true }], onSubmit: (v) => addRecurringExpense(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate) })}>
+                  <Button size="sm" onClick={() => setModal({
+                    title: "Add Recurring Expense",
+                    fields: [
+                      { name: "description", label: "Description", placeholder: "e.g. Office rent", required: true },
+                      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                      { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: "monthly", required: true },
+                      { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: "" },
+                      { name: "startDate", label: "Start Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                      { name: "endDate", label: "End Date (optional)", type: "date" },
+                    ],
+                    onSubmit: (v) => addRecurringExpense(v.projectId || null, parseFloat(v.amount), v.frequency, v.description, v.startDate, v.endDate || null),
+                  })}>
                     <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Expense
                   </Button>
                 </div>
@@ -1844,7 +2395,7 @@ export default function App() {
                   <div className="rounded-lg border overflow-hidden">
                     <Table>
                       <TableHeader>
-                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
+                        <TableRow className="bg-muted/50"><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Project</TableHead><TableHead>Ends</TableHead><TableHead>Status</TableHead><TableHead className="w-10" /></TableRow>
                       </TableHeader>
                       <TableBody>
                         {recurringExpenses.map((item) => (
@@ -1853,6 +2404,7 @@ export default function App() {
                             <TableCell className="text-red-600 tabular-nums font-semibold">{currency(item.amount)}</TableCell>
                             <TableCell><Badge variant="outline">{item.frequency}</Badge></TableCell>
                             <TableCell className="text-muted-foreground">{projects.find((p) => p.id === item.projectId)?.name || "General"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{item.endDate ? formatDate(item.endDate) : "—"}</TableCell>
                             <TableCell>
                               <Button variant="ghost" size="sm" onClick={() => toggleRecurringExpense(item.id, item.active)}>
                                 <Badge variant={item.active ? "default" : "secondary"} className={cn(item.active && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100")}>
@@ -1875,6 +2427,122 @@ export default function App() {
             </Card>
           </TabsContent>
         </Tabs>
+      </div>
+    );
+  }
+
+  // --- Domains View ---
+  function DomainsView() {
+    const sorted = [...domains].sort((a, b) => (a.expiryDate || "").localeCompare(b.expiryDate || ""));
+    const expiringSoon = sorted.filter((d) => {
+      const days = daysUntil(d.expiryDate);
+      return days !== null && days <= 90;
+    });
+    const upcomingCount = expiringSoon.length;
+
+    const domainFields = (defaults = {}) => [
+      { name: "name", label: "Domain Name", placeholder: "e.g. example.com", required: true, default: defaults.name || "" },
+      { name: "expiryDate", label: "Expiry Date", type: "date", required: true, default: defaults.expiryDate || "" },
+      { name: "registrar", label: "Registrar (optional)", placeholder: "e.g. Cloudflare, Namecheap", default: defaults.registrar || "" },
+      { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "No project link", default: defaults.projectId || "" },
+      { name: "recurringRevenueId", label: "Linked Recurring Revenue (optional)", type: "select", options: recurringRevenue.map((r) => ({ id: r.id, name: `${r.description} (${r.frequency})` })), placeholder: "No recurring link", default: defaults.recurringRevenueId || "" },
+      { name: "autoRenew", label: "Auto-renew", type: "checkbox", checkboxLabel: "Domain renews automatically", default: defaults.autoRenew || false },
+      { name: "notes", label: "Notes (optional)", placeholder: "Anything else", default: defaults.notes || "" },
+    ];
+
+    return (
+      <div className="animate-fade-in-up space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Domains</h1>
+            <p className="text-sm text-muted-foreground">{domains.length} domain{domains.length !== 1 ? "s" : ""} tracked · {upcomingCount} expiring within 90 days</p>
+          </div>
+          <Button onClick={() => setModal({
+            title: "Add Domain",
+            fields: domainFields(),
+            onSubmit: (v) => addDomain(v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null),
+          })}>
+            <Plus className="mr-1.5 h-4 w-4" /> Add Domain
+          </Button>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard icon={Globe} label="Total Domains" value={String(domains.length)} variant="default" />
+          <StatCard icon={Clock} label="Expiring ≤ 90 days" value={String(upcomingCount)} variant={upcomingCount > 0 ? "expense" : "default"} />
+          <StatCard icon={CheckCircle2} label="Auto-renew" value={String(domains.filter((d) => d.autoRenew).length)} variant="income" />
+        </div>
+
+        {domains.length === 0 ? (
+          <Card><CardContent className="p-0">
+            <EmptyState icon={Globe} title="No domains tracked" description='Click "Add Domain" above to start tracking expiry dates.' />
+          </CardContent></Card>
+        ) : (
+          <Card>
+            <CardHeader className="pb-4"><CardTitle className="text-base">All Domains</CardTitle><CardDescription>Sorted by expiry · countdown alerts fire 90 days out</CardDescription></CardHeader>
+            <CardContent>
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead>Domain</TableHead>
+                      <TableHead>Expiry</TableHead>
+                      <TableHead>Days</TableHead>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Recurring</TableHead>
+                      <TableHead>Registrar</TableHead>
+                      <TableHead>Auto</TableHead>
+                      <TableHead className="w-20" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sorted.map((d) => {
+                      const days = daysUntil(d.expiryDate);
+                      const flagged = days !== null && days <= 90;
+                      const overdue = days !== null && days < 0;
+                      const project = projects.find((p) => p.id === d.projectId);
+                      const recurring = recurringRevenue.find((r) => r.id === d.recurringRevenueId);
+                      return (
+                        <TableRow key={d.id}>
+                          <TableCell className="font-medium flex items-center gap-2"><Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{d.name}</TableCell>
+                          <TableCell className="text-muted-foreground tabular-nums">{formatDate(d.expiryDate)}</TableCell>
+                          <TableCell>
+                            <Badge className={cn(
+                              "tabular-nums",
+                              overdue ? "bg-red-100 text-red-700 hover:bg-red-100" :
+                              flagged && days <= 30 ? "bg-orange-100 text-orange-700 hover:bg-orange-100" :
+                              flagged ? "bg-amber-100 text-amber-700 hover:bg-amber-100" :
+                              "bg-emerald-100 text-emerald-700 hover:bg-emerald-100",
+                            )}>
+                              {formatExpiryDistance(days)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{project?.name || "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">{recurring?.description || "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">{d.registrar || "—"}</TableCell>
+                          <TableCell>{d.autoRenew ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <span className="text-muted-foreground">—</span>}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setModal({
+                                title: "Edit Domain",
+                                fields: domainFields(d),
+                                onSubmit: (v) => editDomain(d.id, v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null),
+                              })}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteDomain(d.id, d.name)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
@@ -1952,16 +2620,21 @@ export default function App() {
   function ReportsView() {
     const filterByMonth = (dateStr) => dateStr && dateStr.startsWith(reportMonth);
     const monthlyPayments = projectStats.flatMap((p) => (p.payments || []).filter((pay) => filterByMonth(pay.date)));
-    const monthlyRevenue = monthlyPayments.reduce((a, p) => a + p.amount, 0);
+    const monthlyContractRevenue = monthlyPayments.reduce((a, p) => a + p.amount, 0);
+    const monthlyRecurringPaid = recurringRevenuePayments.filter((rp) => filterByMonth(rp.periodDate)).reduce((a, rp) => a + rp.amount, 0);
+    const monthlyRevenue = monthlyContractRevenue + monthlyRecurringPaid;
     const monthlyProjectExpenses = projectStats.flatMap((p) => (p.expenses || []).filter((exp) => filterByMonth(exp.date)));
     const monthlyExpenses = monthlyProjectExpenses.reduce((a, e) => a + e.amount, 0);
     const monthlyBankSpent = bankSpending.filter((s) => filterByMonth(s.date)).reduce((a, s) => a + s.amount, 0);
     const monthlySecretSpent = secretInvestmentSpending.filter((s) => filterByMonth(s.date)).reduce((a, s) => a + s.amount, 0);
     const monthlySuhaibWithdrawn = partnerWithdrawals.filter((w) => w.partnerName === "suhaib" && filterByMonth(w.date)).reduce((a, w) => a + w.amount, 0);
     const monthlyMohammedWithdrawn = partnerWithdrawals.filter((w) => w.partnerName === "mohammed" && filterByMonth(w.date)).reduce((a, w) => a + w.amount, 0);
+    const monthlySuhaibDividend = partnerDividends.filter((d) => d.partnerName === "suhaib" && filterByMonth(d.date)).reduce((a, d) => a + d.amount, 0);
+    const monthlyMohammedDividend = partnerDividends.filter((d) => d.partnerName === "mohammed" && filterByMonth(d.date)).reduce((a, d) => a + d.amount, 0);
     const monthlyBudgetSpent = budgetStats.flatMap((b) => (b.spending || []).filter((s) => filterByMonth(s.date))).reduce((a, s) => a + s.amount, 0);
     const monthlyProfit = monthlyRevenue - monthlyExpenses;
-    const monthlyTotalOutflow = monthlyExpenses + monthlyBankSpent + monthlySecretSpent + monthlySuhaibWithdrawn + monthlyMohammedWithdrawn + monthlyBudgetSpent;
+    const monthlyOperatingOutflow = monthlyExpenses + monthlyBankSpent + monthlySecretSpent + monthlyBudgetSpent;
+    const monthlyDistributions = monthlySuhaibWithdrawn + monthlyMohammedWithdrawn + monthlySuhaibDividend + monthlyMohammedDividend;
 
     return (
       <div className="animate-fade-in-up space-y-6">
@@ -1977,20 +2650,20 @@ export default function App() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard label="Revenue" value={currency(monthlyRevenue)} variant="income" sub={`${monthlyPayments.length} payment${monthlyPayments.length !== 1 ? "s" : ""}`} />
-              <StatCard label="Expenses" value={currency(monthlyExpenses)} variant="expense" sub={`${monthlyProjectExpenses.length} expense${monthlyProjectExpenses.length !== 1 ? "s" : ""}`} />
+              <StatCard label="Revenue" value={currency(monthlyRevenue)} variant="income" sub={`Contract ${currency(monthlyContractRevenue)} + Recurring ${currency(monthlyRecurringPaid)}`} />
+              <StatCard label="Operating Outflow" value={currency(monthlyOperatingOutflow)} variant="expense" sub="Costs only (excl. partner payouts)" />
               <StatCard label="Net Profit" value={currency(monthlyProfit)} variant={monthlyProfit >= 0 ? "income" : "expense"} />
-              <StatCard label="Total Outflow" value={currency(monthlyTotalOutflow)} variant="bank" sub="All spending combined" />
+              <StatCard label="Owner Distributions" value={currency(monthlyDistributions)} variant="bank" sub="Withdrawals + dividends paid" />
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-4"><CardTitle className="text-base">Partner Summary</CardTitle><CardDescription>All-time earnings and withdrawals</CardDescription></CardHeader>
+          <CardHeader className="pb-4"><CardTitle className="text-base">Partner Summary</CardTitle><CardDescription>All-time earnings, share withdrawals, and bank dividends</CardDescription></CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2">
-              <StatCard icon={Users} label="Suhaib" value={currency(suhaibAvailable)} variant="partner1" sub={`Earned: ${currency(globalSuhaib)} · Withdrawn: ${currency(suhaibWithdrawn)}`} />
-              <StatCard icon={Users} label="Mohammed" value={currency(mohammedAvailable)} variant="partner2" sub={`Earned: ${currency(globalMohammed)} · Withdrawn: ${currency(mohammedWithdrawn)}`} />
+              <StatCard icon={Users} label="Suhaib" value={currency(suhaibAvailable)} variant="partner1" sub={`Earned ${currency(globalSuhaib)} · Withdrawn ${currency(suhaibWithdrawn)} · Dividends ${currency(suhaibDividendsTotal)}`} />
+              <StatCard icon={Users} label="Mohammed" value={currency(mohammedAvailable)} variant="partner2" sub={`Earned ${currency(globalMohammed)} · Withdrawn ${currency(mohammedWithdrawn)} · Dividends ${currency(mohammedDividendsTotal)}`} />
             </div>
           </CardContent>
         </Card>
@@ -2043,12 +2716,14 @@ export default function App() {
               <Table>
                 <TableHeader><TableRow className="bg-muted/50"><TableHead>Category</TableHead><TableHead>Inflow</TableHead><TableHead>Outflow</TableHead><TableHead>Net</TableHead></TableRow></TableHeader>
                 <TableBody>
+                  <TableRow className="bg-muted/30"><TableCell colSpan={4} className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">Operating</TableCell></TableRow>
                   {[
-                    { cat: "Project Revenue", inflow: globalRevenue, outflow: 0 },
-                    { cat: "Project Expenses", inflow: 0, outflow: globalExpenses },
+                    { cat: "Contract Revenue", inflow: globalContractRevenue, outflow: 0 },
+                    { cat: "Recurring Revenue (paid)", inflow: recurringRevenueIncome.total, outflow: 0 },
+                    { cat: "Project Expenses (incl. recurring)", inflow: 0, outflow: projectStats.reduce((a, p) => a + p.totalExpenses, 0) },
+                    { cat: "General Recurring Expenses", inflow: 0, outflow: generalRecurringExp },
                     { cat: "Bank Spending", inflow: 0, outflow: globalBank.spent },
                     { cat: "Secret Investment Spending", inflow: 0, outflow: globalSecretInvestment.spent },
-                    { cat: "Partner Withdrawals", inflow: 0, outflow: suhaibWithdrawn + mohammedWithdrawn },
                     { cat: "Budget Spending", inflow: 0, outflow: totalBudgetSpent },
                   ].map((r) => (
                     <TableRow key={r.cat}>
@@ -2058,10 +2733,28 @@ export default function App() {
                       <TableCell className={cn("tabular-nums font-semibold", (r.inflow - r.outflow) >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(r.inflow - r.outflow)}</TableCell>
                     </TableRow>
                   ))}
+                  <TableRow className="border-t font-bold bg-muted/20">
+                    <TableCell>Operating Net</TableCell>
+                    <TableCell className="text-emerald-600 tabular-nums">{currency(globalRevenue)}</TableCell>
+                    <TableCell className="text-red-600 tabular-nums">{currency(operatingOutflow)}</TableCell>
+                    <TableCell className={cn("tabular-nums", operatingNet >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(operatingNet)}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-muted/30"><TableCell colSpan={4} className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">Owner Distributions (paid to partners)</TableCell></TableRow>
+                  {[
+                    { cat: "Partner Share Withdrawals", inflow: 0, outflow: suhaibWithdrawn + mohammedWithdrawn },
+                    { cat: "Partner Bank Dividends", inflow: 0, outflow: totalDividendsPaid },
+                  ].map((r) => (
+                    <TableRow key={r.cat}>
+                      <TableCell className="font-medium">{r.cat}</TableCell>
+                      <TableCell className="tabular-nums">-</TableCell>
+                      <TableCell className={cn("tabular-nums", r.outflow > 0 && "text-red-600 font-semibold")}>{r.outflow > 0 ? currency(r.outflow) : "-"}</TableCell>
+                      <TableCell className={cn("tabular-nums font-semibold", -r.outflow >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(-r.outflow)}</TableCell>
+                    </TableRow>
+                  ))}
                   <TableRow className="border-t-2 font-bold">
                     <TableCell>Net Cash Position</TableCell>
                     <TableCell className="text-emerald-600 tabular-nums">{currency(globalRevenue)}</TableCell>
-                    <TableCell className="text-red-600 tabular-nums">{currency(globalExpenses + globalBank.spent + globalSecretInvestment.spent + suhaibWithdrawn + mohammedWithdrawn + totalBudgetSpent)}</TableCell>
+                    <TableCell className="text-red-600 tabular-nums">{currency(operatingOutflow + totalDistributions)}</TableCell>
                     <TableCell className={cn("tabular-nums", totalPhysicalBank >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(totalPhysicalBank)}</TableCell>
                   </TableRow>
                 </TableBody>
@@ -2081,17 +2774,17 @@ export default function App() {
                   <TableHeader><TableRow className="bg-muted/50"><TableHead>Project</TableHead><TableHead>Value</TableHead><TableHead>Revenue</TableHead><TableHead>Expenses</TableHead><TableHead>Profit</TableHead><TableHead>Margin</TableHead></TableRow></TableHeader>
                   <TableBody>
                     {projectStats.slice().reverse().map((p) => {
-                      const margin = p.totalPaid > 0 ? ((p.profit / p.totalPaid) * 100).toFixed(1) : "0.0";
+                      const margin = p.totalPaid > 0 ? ((p.profit / p.totalPaid) * 100).toFixed(1) : p.totalValue === 0 ? "—" : "0.0";
                       return (
                         <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openProject(p.id)}>
-                          <TableCell className="font-semibold">{p.name}</TableCell>
-                          <TableCell className="tabular-nums">{currency(p.totalValue)}</TableCell>
+                          <TableCell className="font-semibold">{p.name}{p.totalValue === 0 && <Badge className="ml-2 bg-emerald-100 text-emerald-700 hover:bg-emerald-100 text-[10px]">Free</Badge>}</TableCell>
+                          <TableCell className="tabular-nums">{p.totalValue === 0 ? "Free" : currency(p.totalValue)}</TableCell>
                           <TableCell className="tabular-nums text-emerald-600">{currency(p.totalPaid)}</TableCell>
                           <TableCell className="tabular-nums text-red-600">{currency(p.totalExpenses)}</TableCell>
                           <TableCell className={cn("tabular-nums font-semibold", p.profit >= 0 ? "text-emerald-600" : "text-red-600")}>{currency(p.profit)}</TableCell>
                           <TableCell>
-                            <Badge variant={parseFloat(margin) >= 50 ? "default" : "secondary"} className={cn(parseFloat(margin) >= 50 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", parseFloat(margin) < 0 && "bg-red-100 text-red-700 hover:bg-red-100")}>
-                              {margin}%
+                            <Badge variant={margin === "—" ? "outline" : parseFloat(margin) >= 50 ? "default" : "secondary"} className={cn(margin !== "—" && parseFloat(margin) >= 50 && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100", margin !== "—" && parseFloat(margin) < 0 && "bg-red-100 text-red-700 hover:bg-red-100")}>
+                              {margin === "—" ? "—" : `${margin}%`}
                             </Badge>
                           </TableCell>
                         </TableRow>
@@ -2161,6 +2854,7 @@ export default function App() {
           {view === "bank" && <BankView />}
           {view === "budgets" && <BudgetsView />}
           {view === "recurring" && <RecurringView />}
+          {view === "domains" && <DomainsView />}
           {view === "reports" && <ReportsView />}
           {view === "secretInvestment" && <SecretInvestmentView />}
         </div>
