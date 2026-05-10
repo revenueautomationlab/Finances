@@ -2236,13 +2236,22 @@ export default function App() {
     const activeRev = recurringRevenue.filter((r) => r.active);
     const activeExp = recurringExpenses.filter((r) => r.active);
 
-    // Monthly run-rate: yearly items / 12, monthly items as-is
-    const monthlyRevRate = activeRev.reduce((a, r) => a + (r.frequency === "yearly" ? r.amount / 12 : r.amount), 0);
+    // Revenue counts only what we're actually collecting.
+    // - General (untagged) active items: flow direct to bank, no payment tracking — count if active.
+    // - Project-linked items: only count if at least one period has been paid (validated as flowing).
+    const validatedRev = activeRev.filter((r) => {
+      if (!r.projectId) return true;
+      return recurringRevenuePayments.some((rp) => rp.recurringRevenueId === r.id);
+    });
+    const unvalidatedCount = activeRev.length - validatedRev.length;
+
+    // Monthly run-rate: yearly items / 12, monthly items as-is. Revenue uses validated-only.
+    const monthlyRevRate = validatedRev.reduce((a, r) => a + (r.frequency === "yearly" ? r.amount / 12 : r.amount), 0);
     const monthlyExpRate = activeExp.reduce((a, r) => a + (r.frequency === "yearly" ? r.amount / 12 : r.amount), 0);
     const netMonthlyRate = monthlyRevRate - monthlyExpRate;
 
-    // Year potential / cost (capped to current year via getYearPotentialCount)
-    const yearRevPotential = activeRev.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
+    // Year potential / cost (capped to current year). Revenue uses validated-only.
+    const yearRevPotential = validatedRev.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
     const yearExpCost = activeExp.reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
 
     // Cash actually collected from project-linked recurring revenue
@@ -2277,8 +2286,8 @@ export default function App() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard icon={ArrowUpRight} label="Revenue Collected" value={currency(totalRevCollected)} variant="income" sub={pendingProjectRev > 0 ? `+ ${currency(pendingProjectRev)} pending` : "All paid"} />
           <StatCard icon={ArrowDownRight} label="Expense Cost (accrual)" value={currency(accrualExpTotal)} variant="expense" sub={totalExpPaidOut > 0 ? `${currency(totalExpPaidOut)} paid out` : "All periods counted as cost"} />
-          <StatCard icon={Repeat} label="Net Monthly Run-rate" value={currency(netMonthlyRate)} variant={netMonthlyRate >= 0 ? "income" : "expense"} sub={`${currency(monthlyRevRate)} in / ${currency(monthlyExpRate)} out`} />
-          <StatCard icon={CircleDollarSign} label="Year Potential" value={currency(yearRevPotential)} variant="highlight" sub={`Net ${currency(yearRevPotential - yearExpCost)} (year cost ${currency(yearExpCost)})`} />
+          <StatCard icon={Repeat} label="Net Monthly Run-rate" value={currency(netMonthlyRate)} variant={netMonthlyRate >= 0 ? "income" : "expense"} sub={`${currency(monthlyRevRate)} in / ${currency(monthlyExpRate)} out${unvalidatedCount > 0 ? ` · ${unvalidatedCount} unpaid excluded` : ""}`} />
+          <StatCard icon={CircleDollarSign} label="Year Potential" value={currency(yearRevPotential)} variant="highlight" sub={`Net ${currency(yearRevPotential - yearExpCost)} · only validated streams`} />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -2331,6 +2340,12 @@ export default function App() {
                           const days = item.endDate ? daysUntil(item.endDate) : null;
                           const threshold = reminderThresholdDays(item.frequency);
                           const flagged = item.active && days !== null && days <= threshold;
+                          const hasPayments = recurringRevenuePayments.some((rp) => rp.recurringRevenueId === item.id);
+                          // Status: Paused if inactive, Unpaid if project-linked active but no payments yet, Active otherwise
+                          let statusLabel, statusClass;
+                          if (!item.active) { statusLabel = "Paused"; statusClass = ""; }
+                          else if (item.projectId && !hasPayments) { statusLabel = "Unpaid"; statusClass = "bg-amber-100 text-amber-700 hover:bg-amber-100"; }
+                          else { statusLabel = "Active"; statusClass = "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"; }
                           return (
                           <TableRow key={item.id}>
                             <TableCell className="font-medium">{item.description}</TableCell>
@@ -2345,9 +2360,9 @@ export default function App() {
                               ) : <span className="text-muted-foreground text-xs">—</span>}
                             </TableCell>
                             <TableCell>
-                              <Button variant="ghost" size="sm" className={cn("h-7 text-xs", item.active ? "text-emerald-600" : "text-muted-foreground")} onClick={() => toggleRecurringRevenue(item.id, item.active)}>
-                                <Badge variant={item.active ? "default" : "secondary"} className={cn(item.active && "bg-emerald-100 text-emerald-700 hover:bg-emerald-100")}>
-                                  {item.active ? "Active" : "Paused"}
+                              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => toggleRecurringRevenue(item.id, item.active)}>
+                                <Badge variant={item.active ? "default" : "secondary"} className={cn(statusClass)}>
+                                  {statusLabel}
                                 </Badge>
                               </Button>
                             </TableCell>
