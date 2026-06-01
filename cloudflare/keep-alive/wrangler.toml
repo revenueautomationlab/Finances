@@ -3,7 +3,8 @@ main = "src/index.js"
 compatibility_date = "2026-05-09"
 
 [triggers]
-crons = ["0 8 */3 * *"]
+# Daily at 08:00 UTC — well under Supabase's 7-day pause threshold, with a 6-day margin even if a run misses.
+crons = ["0 8 * * *"]
 
 # Public anon-only credentials (also exposed in the SPA bundle).
 # Never put a service_role key or any non-public secret here — use `wrangler secret put` for those.
