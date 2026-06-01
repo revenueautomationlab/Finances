@@ -80,6 +80,31 @@ All tables have:
 - **PostgreSQL does NOT support `CREATE POLICY IF NOT EXISTS`** — use `DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;` blocks instead
 - Use `IF NOT EXISTS` / `IF EXISTS` for tables and indexes (but NOT for policies)
 
+### Data API exposure (Supabase change effective Oct 30, 2026)
+Starting Oct 30, 2026, Supabase removes the default grant of `public` schema tables to the `authenticated` / `anon` roles. New tables created after that date won't be reachable via PostgREST / supabase-js unless you add an explicit `GRANT`.
+
+**Existing tables in this project (created before Oct 30, 2026) keep their implicit grants permanently — no fix needed.** This applies only to future tables.
+
+When creating a new table in a migration after this date, include the grant. This app only uses the `authenticated` role (no anon access — auth is enforced by AuthContext):
+
+```sql
+CREATE TABLE IF NOT EXISTS my_table (
+  id TEXT PRIMARY KEY,
+  ...
+);
+
+-- Explicit grant — required for tables created on/after Oct 30, 2026
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.my_table TO authenticated;
+
+ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  CREATE POLICY "Auth manage my_table" ON my_table FOR ALL TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+```
+
+Note: this app uses TEXT primary keys (not SERIAL/IDENTITY), so no sequence grants are needed. Don't grant to `anon` — the SPA never uses the anon role for data access.
+
 ## Business Logic
 
 ### Project Profit (Contract + Tagged Recurring)
