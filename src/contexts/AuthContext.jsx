@@ -13,16 +13,23 @@ const ADMIN_EMAIL = "revenueautomationlab@gmail.com";
 async function resolveAccess(email) {
   if (!email) return { allowed: false, role: null };
   if (email === ADMIN_EMAIL) return { allowed: true, role: "admin" };
-  try {
-    const { data, error } = await supabase
-      .from("app_users")
-      .select("role,status")
-      .eq("email", email)
-      .maybeSingle();
-    if (error) throw error;
-    if (data && data.status === "active") return { allowed: true, role: data.role };
-  } catch (err) {
-    console.error("Role lookup failed:", err);
+  // Retry once: right after OAuth the client session may not be attached yet, so the RLS-guarded
+  // app_users query can momentarily return nothing — without the retry an authorized user would be
+  // wrongly force-signed-out. A genuinely unauthorized user still returns empty on both attempts.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { data, error } = await supabase
+        .from("app_users")
+        .select("role,status")
+        .eq("email", email)
+        .maybeSingle();
+      if (error) throw error;
+      if (data && data.status === "active") return { allowed: true, role: data.role };
+      if (data) return { allowed: false, role: null }; // row exists but disabled → definitive
+    } catch (err) {
+      console.error(`Role lookup failed (attempt ${attempt}):`, err);
+    }
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 600));
   }
   return { allowed: false, role: null };
 }
@@ -57,10 +64,11 @@ function clearSupabaseStorage() {
  */
 async function forceFullSignOut() {
   try {
-    // Use "global" scope to also revoke the session on Supabase's server,
-    // not just clear the local token. This prevents stale sessions from
-    // being re-established on the next OAuth callback.
-    await supabase.auth.signOut({ scope: "global" });
+    // "local" scope: sign out ONLY this device/browser. Using "global" (the default) would
+    // revoke the user's sessions on every device — which logged people out when switching
+    // accounts and broke multi-device use. Local + the storage purge below is enough to
+    // cleanly swap accounts here.
+    await supabase.auth.signOut({ scope: "local" });
   } catch (err) {
     // Ignore errors — the session may already be invalid
     console.warn("signOut threw (safe to ignore):", err);
