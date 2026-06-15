@@ -746,12 +746,19 @@ async function adminAction(action, body) {
     return null;
   };
 
-  // getSession() auto-refreshes if expired, but can still hand back a token the server rejects
-  // (clock skew etc). Canonical pattern (per Supabase docs): on a 401/403, refresh and retry once.
-  let { data: { session } } = await supabase.auth.getSession();
-  let token = session?.access_token || (await freshToken());
+  // Get a token, retrying getSession() (which auto-refreshes) to ride out the brief window right
+  // after a login/account-switch where the session isn't attached yet. Only fall back to an
+  // explicit refresh as a last resort (avoids racing the client's own auto-refresh).
+  let token = null;
+  for (let i = 0; i < 4 && !token; i += 1) {
+    const { data: { session } } = await supabase.auth.getSession();
+    token = session?.access_token || null;
+    if (!token && i < 3) await new Promise((r) => setTimeout(r, 400));
+  }
+  if (!token) token = await freshToken();
   if (!token) throw new Error("Session expired — please sign out and sign in again");
 
+  // Canonical pattern (per Supabase docs): on a 401/403 refresh once and retry.
   let { res, json } = await post(token);
   if (res.status === 401 || res.status === 403) {
     const t2 = await freshToken();

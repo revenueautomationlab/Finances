@@ -1494,7 +1494,7 @@ export default function App() {
     const loadUsers = async () => { try { setUsers(await dbFetchAppUsers()); } catch (e) { toast.error(`Load users failed: ${e.message}`); } };
     const loadAudit = async (table = auditTable) => { try { setAudit(await dbFetchAuditLog({ limit: 200, table: table || null })); } catch (e) { toast.error(`Load audit failed: ${e.message}`); } };
     const loadSnapshots = async () => { try { setSnapshots(await dbFetchSnapshots()); } catch (e) { toast.error(`Load backups failed: ${e.message}`); } };
-    const loadUsage = async () => { setUsageBusy(true); try { setUsage(await dbFetchResendUsage()); } catch (e) { toast.error(`Email usage failed: ${e.message}`); } finally { setUsageBusy(false); } };
+    const loadUsage = async (showError = false) => { setUsageBusy(true); try { setUsage(await dbFetchResendUsage()); } catch (e) { console.error("email usage:", e); if (showError) toast.error(`Email usage: ${e.message}`); } finally { setUsageBusy(false); } };
     useEffect(() => { loadUsers(); loadAudit(""); loadSnapshots(); loadUsage(); /* eslint-disable-next-line */ }, []);
 
     const backupNow = async () => {
@@ -1587,7 +1587,7 @@ export default function App() {
                 <p className="text-sm font-semibold">Email quota — Resend</p>
                 <p className="text-xs text-muted-foreground">{usage?.updatedAt ? `As of ${new Date(usage.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "Updates whenever an email is sent"}</p>
               </div>
-              <Button size="sm" variant="outline" onClick={loadUsage} disabled={usageBusy}>{usageBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1.5 h-4 w-4" />} Refresh</Button>
+              <Button size="sm" variant="outline" onClick={() => loadUsage(true)} disabled={usageBusy}>{usageBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1.5 h-4 w-4" />} Refresh</Button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               {[{ label: "Today", used: usage?.dailyUsed, limit: usage?.dailyLimit, rem: usage?.dailyRemaining }, { label: "This month", used: usage?.monthlyUsed, limit: usage?.monthlyLimit, rem: usage?.monthlyRemaining }].map((q) => {
@@ -1736,6 +1736,24 @@ export default function App() {
                 <Button size="sm" onClick={backupNow} disabled={backupBusy}>{backupBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <History className="mr-1.5 h-4 w-4" />} Back up now</Button>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* Backup status: automatic schedule + most recent backup */}
+                <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
+                  <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", snapshots.length ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600")}>
+                    <History className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1 text-sm">
+                    <p className="font-medium">Automatic backup — daily at 08:00 (Asia/Bahrain), last 30 kept</p>
+                    {snapshots.length ? (
+                      <p className="text-xs text-muted-foreground">
+                        Latest: <b>{new Date(snapshots[0].createdAt).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                        {" · "}{snapshots[0].createdBy?.startsWith("cron") ? "automatic" : (snapshots[0].createdBy?.startsWith("pre-restore") ? "pre-restore safety" : `manual (${snapshots[0].createdBy})`)}
+                        {" · "}{snapTotal(snapshots[0].rowCounts)} rows · {snapshots.length} total
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No backup yet — the first runs at 8am, or click “Back up now”.</p>
+                    )}
+                  </div>
+                </div>
                 <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>For everyday mistakes, prefer the <b>Audit Log</b> (revert a change / restore a deleted row while keeping later data). A full <b>Restore</b> below replaces all current data with the snapshot — a safety backup is taken automatically first, and it needs a code emailed to {user?.email}.</span>
