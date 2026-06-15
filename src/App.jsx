@@ -1449,9 +1449,10 @@ export default function App() {
 
         {expiryAlerts.length > 0 && <ExpiryAlertsBanner alerts={expiryAlerts} />}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`Contract: ${currency(globalContractRevenue)} · Recurring: ${currency(recurringRevenueIncome.total)}`} variant="income" />
-          <StatCard icon={TrendingDown} label="Operating Outflow" value={currency(operatingOutflow)} variant="expense" sub="Costs only (excl. partner payouts)" />
+          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" sub="Project + recurring expenses" onClick={() => setView("projects")} />
+          <StatCard icon={ArrowDownRight} label="Operating Outflow" value={currency(operatingOutflow)} variant="expense" sub="All costs (excl. partner payouts)" />
           <StatCard icon={Percent} label="Operating Margin" value={`${globalMargin.toFixed(1)}%`} variant={globalMargin >= 25 ? "income" : globalMargin >= 0 ? "highlight" : "expense"} sub={`Operating net: ${currency(operatingNet)}`} />
           <StatCard icon={Landmark} label="Total in Bank" value={currency(totalPhysicalBank)} variant="bank" sub={totalDistributions > 0 ? `After ${currency(totalDistributions)} paid to partners` : undefined} />
         </div>
@@ -2672,7 +2673,6 @@ export default function App() {
   function PaymentsView() {
     const paymentFields = (defaults = {}) => [
       { name: "direction", label: "Direction", type: "select", options: [{ id: "outgoing", name: "Outgoing (we pay)" }, { id: "incoming", name: "Incoming (we receive)" }], default: defaults.direction || "outgoing", required: true },
-      { name: "category", label: "Category", type: "select", options: PAYMENT_CATEGORIES, default: defaults.category || "other", required: true },
       { name: "name", label: "Name / Description", placeholder: "e.g. Apple Developer Program", required: true, default: defaults.name || "" },
       { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true, allowZero: true, default: defaults.amount !== undefined && defaults.amount !== null ? String(defaults.amount) : "" },
       { name: "frequency", label: "Frequency", type: "select", options: PAYMENT_FREQUENCIES, default: defaults.frequency || "yearly", required: true },
@@ -2685,12 +2685,12 @@ export default function App() {
     const openAdd = (direction = "outgoing") => setModal({
       title: "Add Payment",
       fields: paymentFields({ direction }),
-      onSubmit: (v) => addPaymentItem(v.direction, v.category, v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, v.notes || null),
+      onSubmit: (v) => addPaymentItem(v.direction, "other", v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, v.notes || null),
     });
     const openEdit = (item) => setModal({
       title: "Edit Payment",
       fields: paymentFields(item),
-      onSubmit: (v) => editPaymentItem(item.id, v.direction, v.category, v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, item.active, v.notes || null),
+      onSubmit: (v) => editPaymentItem(item.id, v.direction, item.category || "other", v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, item.active, v.notes || null),
     });
 
     // Summary stats (informational only)
@@ -2718,7 +2718,7 @@ export default function App() {
       const title = entry.kind === "domain" ? entry.domain.name : entry.item.name;
       const meta = entry.kind === "domain"
         ? `Domain renewal${entry.domain.registrar ? ` · ${entry.domain.registrar}` : ""}`
-        : `${paymentCategoryLabel(entry.item.category)} · ${frequencyLabel(entry.item.frequency)}`;
+        : frequencyLabel(entry.item.frequency);
       return (
         <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted/60">
@@ -2769,6 +2769,10 @@ export default function App() {
             const project = projects.find((p) => p.id === item.projectId);
             const days = nextDue ? daysUntil(nextDue) : null;
             const expanded = paymentsExpandedId === item.id;
+            const paidRecords = paymentSchedulePayments
+              .filter((pp) => pp.paymentScheduleId === item.id)
+              .sort((a, b) => a.periodDate.localeCompare(b.periodDate));
+            const lastPaid = paidRecords[paidRecords.length - 1];
             return (
               <div key={item.id} className={cn("rounded-lg border", !item.active && "opacity-60")}>
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -2778,7 +2782,6 @@ export default function App() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium truncate">{item.name}</span>
-                      <Badge variant="outline" className="text-[10px]">{paymentCategoryLabel(item.category)}</Badge>
                       <Badge variant="outline" className="text-[10px]">{frequencyLabel(item.frequency)}</Badge>
                       {!item.active && <Badge className="bg-muted text-muted-foreground text-[10px] hover:bg-muted">Closed</Badge>}
                       {overdueCount > 0 && item.active && <Badge className="bg-red-100 text-red-700 text-[10px] hover:bg-red-100">{overdueCount} overdue</Badge>}
@@ -2798,7 +2801,12 @@ export default function App() {
                   <div className="flex items-center gap-1 shrink-0">
                     {item.active && nextDue && (
                       <Button size="sm" variant="outline" className="h-8" disabled={loading} onClick={() => togglePaymentPaid(item, nextDue, null)}>
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Paid
+                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark paid
+                      </Button>
+                    )}
+                    {lastPaid && (
+                      <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" disabled={loading} onClick={() => togglePaymentPaid(item, lastPaid.periodDate, lastPaid)} title={`Undo paid: ${formatDate(lastPaid.periodDate)}`}>
+                        <RotateCcw className="mr-1 h-3.5 w-3.5" /> Unpay
                       </Button>
                     )}
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(item)} title="Edit"><Pencil className="h-3.5 w-3.5" /></Button>
