@@ -162,6 +162,7 @@ export async function fetchState() {
         recurringRevenueId: d.recurring_revenue_id,
         registrar: d.registrar,
         autoRenew: d.auto_renew,
+        renewalCost: parseFloat(d.renewal_cost) || 0,
         notes: d.notes,
         createdAt: d.created_at,
       })),
@@ -535,7 +536,7 @@ export async function deletePartnerDividend(id) {
 }
 
 // Domain operations
-export async function addDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) {
+export async function addDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) {
   const { data, error } = await supabase
     .from("domains")
     .insert([
@@ -547,6 +548,7 @@ export async function addDomain(name, expiryDate, projectId, recurringRevenueId,
         recurring_revenue_id: recurringRevenueId || null,
         registrar: registrar || null,
         auto_renew: !!autoRenew,
+        renewal_cost: renewalCost || 0,
         notes: notes || null,
       },
     ])
@@ -556,7 +558,7 @@ export async function addDomain(name, expiryDate, projectId, recurringRevenueId,
   return data[0];
 }
 
-export async function updateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) {
+export async function updateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) {
   const { error } = await supabase
     .from("domains")
     .update({
@@ -566,6 +568,7 @@ export async function updateDomain(id, name, expiryDate, projectId, recurringRev
       recurring_revenue_id: recurringRevenueId || null,
       registrar: registrar || null,
       auto_renew: !!autoRenew,
+      renewal_cost: renewalCost || 0,
       notes: notes || null,
     })
     .eq("id", id);

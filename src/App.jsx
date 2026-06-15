@@ -1022,10 +1022,10 @@ export default function App() {
   };
 
   // --- Domains ---
-  const addDomain = async (name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) => {
+  const addDomain = async (name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) => {
     setLoading(true);
     try {
-      await dbAddDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes);
+      await dbAddDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost);
       await refreshData();
       toast.success(`Domain "${name}" added`);
       setModal(null);
@@ -1036,10 +1036,10 @@ export default function App() {
     }
   };
 
-  const editDomain = async (id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes) => {
+  const editDomain = async (id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) => {
     setLoading(true);
     try {
-      await dbUpdateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes);
+      await dbUpdateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost);
       await refreshData();
       toast.success(`Domain "${name}" updated`);
       setModal(null);
@@ -1200,7 +1200,7 @@ export default function App() {
     const next = toISODate(new Date(cur.getFullYear() + 1, cur.getMonth(), cur.getDate()));
     setLoading(true);
     try {
-      await dbUpdateDomain(d.id, d.name, next, d.projectId, d.recurringRevenueId, d.registrar, d.autoRenew, d.notes);
+      await dbUpdateDomain(d.id, d.name, next, d.projectId, d.recurringRevenueId, d.registrar, d.autoRenew, d.notes, d.renewalCost);
       await refreshData();
       toast.success(`${d.name} renewed → ${formatDate(next)}`);
     } catch (error) {
@@ -2946,7 +2946,7 @@ export default function App() {
     const inWindow = (e) => e.days !== null && e.days >= 0 && e.days <= entryLead(e);
     const dueSoonCount = paymentTimeline.filter(inWindow).length;
     const overdueCount = paymentTimeline.filter((e) => e.days !== null && e.days < 0).length;
-    const outSoon = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "outgoing" && (inWindow(e) || e.days < 0)).reduce((a, e) => a + e.item.amount, 0);
+    const outSoon = paymentTimeline.filter((e) => (inWindow(e) || e.days < 0) && (e.kind === "domain" || e.item.direction === "outgoing")).reduce((a, e) => a + (e.kind === "domain" ? (e.domain.renewalCost || 0) : e.item.amount), 0);
     const inSoon = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "incoming" && (inWindow(e) || e.days < 0)).reduce((a, e) => a + e.item.amount, 0);
 
     // Frequency-aware groups: an item only enters "Due soon" once inside its lead window.
@@ -2986,7 +2986,7 @@ export default function App() {
           <div className="text-right shrink-0">
             {entry.kind === "schedule"
               ? <p className={cn("font-semibold tabular-nums text-sm", entry.item.direction === "incoming" ? "text-emerald-700" : "text-red-600")}>{currency(entry.item.amount)}</p>
-              : <p className="text-xs text-muted-foreground">renewal</p>}
+              : <p className="font-semibold tabular-nums text-sm text-red-600">{entry.domain.renewalCost > 0 ? currency(entry.domain.renewalCost) : "renewal"}</p>}
             <p className="text-[11px] text-muted-foreground tabular-nums">{formatDate(entry.dueDate)}</p>
           </div>
           <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(entry.days, entryLead(entry)))}>{formatExpiryDistance(entry.days)}</Badge>
@@ -3218,6 +3218,7 @@ export default function App() {
     const domainFields = (defaults = {}) => [
       { name: "name", label: "Domain Name", placeholder: "e.g. example.com", required: true, default: defaults.name || "" },
       { name: "expiryDate", label: "Expiry Date", type: "date", required: true, default: defaults.expiryDate || "" },
+      { name: "renewalCost", label: "Renewal cost (BHD)", type: "number", placeholder: "0.000", allowZero: true, default: defaults.renewalCost !== undefined && defaults.renewalCost !== null ? String(defaults.renewalCost) : "" },
       { name: "registrar", label: "Registrar (optional)", placeholder: "e.g. Cloudflare, Namecheap", default: defaults.registrar || "" },
       { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "No project link", default: defaults.projectId || "" },
       { name: "recurringRevenueId", label: "Linked Recurring Revenue (optional)", type: "select", options: recurringRevenue.map((r) => ({ id: r.id, name: `${r.description} (${r.frequency})` })), placeholder: "No recurring link", default: defaults.recurringRevenueId || "" },
@@ -3237,7 +3238,7 @@ export default function App() {
           <Button onClick={() => setModal({
             title: "Add Domain",
             fields: domainFields(),
-            onSubmit: (v) => addDomain(v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null),
+            onSubmit: (v) => addDomain(v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null, parseFloat(v.renewalCost) || 0),
           })}>
             <Plus className="mr-1.5 h-4 w-4" /> Add Domain
           </Button>
@@ -3264,6 +3265,7 @@ export default function App() {
                       <TableHead>Domain</TableHead>
                       <TableHead>Expiry</TableHead>
                       <TableHead>Days</TableHead>
+                      <TableHead>Cost</TableHead>
                       <TableHead>Project</TableHead>
                       <TableHead>Recurring</TableHead>
                       <TableHead>Registrar</TableHead>
@@ -3293,6 +3295,7 @@ export default function App() {
                               {formatExpiryDistance(days)}
                             </Badge>
                           </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">{d.renewalCost > 0 ? currency(d.renewalCost) : "—"}</TableCell>
                           <TableCell className="text-muted-foreground">{project?.name || "—"}</TableCell>
                           <TableCell className="text-muted-foreground">{recurring?.description || "—"}</TableCell>
                           <TableCell className="text-muted-foreground">{d.registrar || "—"}</TableCell>
@@ -3302,7 +3305,7 @@ export default function App() {
                               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setModal({
                                 title: "Edit Domain",
                                 fields: domainFields(d),
-                                onSubmit: (v) => editDomain(d.id, v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null),
+                                onSubmit: (v) => editDomain(d.id, v.name, v.expiryDate, v.projectId || null, v.recurringRevenueId || null, v.registrar || null, v.autoRenew === true || v.autoRenew === "true", v.notes || null, parseFloat(v.renewalCost) || 0),
                               })}>
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
