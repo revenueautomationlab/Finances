@@ -729,26 +729,34 @@ export async function applyAuditRevert(entry) {
 // worker with the caller's Supabase JWT; the worker verifies admin + holds the service_role key.
 const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
 async function adminAction(action, body) {
-  let { data: { session } } = await supabase.auth.getSession();
-  // The worker validates the JWT server-side, so a stale/expiring token is rejected (403).
-  // Refresh if it's missing or within 2 minutes of expiry. refreshSession() returns a fresh
-  // session regardless of expiry (throws only if the refresh token itself is invalid).
-  const nowSec = Math.floor(Date.now() / 1000);
-  const stale = !session?.access_token || (session?.expires_at && session.expires_at <= nowSec + 120);
-  if (stale) {
+  const post = async (token) => {
+    const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    return { res, json };
+  };
+  const freshToken = async () => {
     try {
       const { data, error } = await supabase.auth.refreshSession();
-      if (!error && data?.session) session = data.session;
-    } catch (_) { /* fall through to the clear error below */ }
-  }
-  const token = session?.access_token;
+      if (!error && data?.session?.access_token) return data.session.access_token;
+    } catch (_) { /* refresh token invalid */ }
+    return null;
+  };
+
+  // getSession() auto-refreshes if expired, but can still hand back a token the server rejects
+  // (clock skew etc). Canonical pattern (per Supabase docs): on a 401/403, refresh and retry once.
+  let { data: { session } } = await supabase.auth.getSession();
+  let token = session?.access_token || (await freshToken());
   if (!token) throw new Error("Session expired — please sign out and sign in again");
-  const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  const json = await res.json().catch(() => ({}));
+
+  let { res, json } = await post(token);
+  if (res.status === 401 || res.status === 403) {
+    const t2 = await freshToken();
+    if (t2) ({ res, json } = await post(t2));
+  }
   if (!res.ok || !json.ok) throw new Error(json.error || `Request failed (${res.status})`);
   return json;
 }
