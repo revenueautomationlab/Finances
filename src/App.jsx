@@ -914,12 +914,13 @@ export default function App() {
     }
   };
 
-  const editRecurringRevenue = async (id, amount, frequency, description, startDate, endDate) => {
+  const editRecurringRevenue = async (id, amount, frequency, description, startDate, endDate, projectId) => {
     setLoading(true);
     try {
       const item = recurringRevenue.find((r) => r.id === id);
       const resolvedEnd = endDate === undefined ? (item.endDate ?? null) : (endDate || null);
-      await dbUpdateRecurringRevenue(id, item.projectId, amount, frequency, description, item.active, startDate || null, resolvedEnd);
+      const resolvedProject = projectId === undefined ? item.projectId : (projectId || null);
+      await dbUpdateRecurringRevenue(id, resolvedProject, amount, frequency, description, item.active, startDate || null, resolvedEnd);
       await refreshData();
       toast.success("Recurring revenue updated");
       setModal(null);
@@ -974,12 +975,13 @@ export default function App() {
     }
   };
 
-  const editRecurringExpense = async (id, amount, frequency, description, startDate, endDate) => {
+  const editRecurringExpense = async (id, amount, frequency, description, startDate, endDate, projectId) => {
     setLoading(true);
     try {
       const item = recurringExpenses.find((r) => r.id === id);
       const resolvedEnd = endDate === undefined ? (item.endDate ?? null) : (endDate || null);
-      await dbUpdateRecurringExpense(id, item.projectId, amount, frequency, description, item.active, startDate || null, resolvedEnd);
+      const resolvedProject = projectId === undefined ? item.projectId : (projectId || null);
+      await dbUpdateRecurringExpense(id, resolvedProject, amount, frequency, description, item.active, startDate || null, resolvedEnd);
       await refreshData();
       toast.success("Recurring expense updated");
       setModal(null);
@@ -1483,7 +1485,7 @@ export default function App() {
       title: "Onboard User",
       fields: [
         { name: "email", label: "Google email (must be @gmail.com)", placeholder: "person@gmail.com", required: true },
-        { name: "role", label: "Role", type: "select", options: [{ id: "reader", name: "Reader — view only" }, { id: "full", name: "Full — edit & delete" }], default: "reader", required: true },
+        { name: "role", label: "Role", type: "select", options: [{ id: "reader", name: "Reader — view only" }, { id: "full", name: "Full — edit & delete" }, { id: "admin", name: "Admin — full + manage users" }], default: "reader", required: true },
       ],
       onSubmit: async (v) => {
         const email = (v.email || "").toLowerCase().trim();
@@ -1556,10 +1558,14 @@ export default function App() {
                         <TableRow key={u.email}>
                           <TableCell className="font-medium">{u.email}</TableCell>
                           <TableCell>
-                            <select value={u.role} onChange={(e) => setUserRole(u.email, e.target.value)} className="rounded-md border bg-card px-2 py-1 text-xs">
-                              <option value="reader">reader</option>
-                              <option value="full">full</option>
-                            </select>
+                            <Select value={u.role} onValueChange={(v) => setUserRole(u.email, v)}>
+                              <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="reader">Reader</SelectItem>
+                                <SelectItem value="full">Full</SelectItem>
+                                <SelectItem value="admin">Admin</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </TableCell>
                           <TableCell>
                             <Badge className={cn("hover:opacity-100", u.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground")}>{u.status}</Badge>
@@ -2829,9 +2835,25 @@ export default function App() {
                               </Button>
                             </TableCell>
                             <TableCell>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringRevenue(item.id, item.description)}>
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit" onClick={() => setModal({
+                                  title: "Edit Recurring Revenue",
+                                  fields: [
+                                    { name: "description", label: "Description", required: true, default: item.description },
+                                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true, default: String(item.amount) },
+                                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: item.frequency, required: true },
+                                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: item.projectId || "" },
+                                    { name: "startDate", label: "Start Date", type: "date", default: item.startDate || "", required: true },
+                                    { name: "endDate", label: "End Date (optional)", type: "date", default: item.endDate || "" },
+                                  ],
+                                  onSubmit: (v) => editRecurringRevenue(item.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null, v.projectId || null),
+                                })}>
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringRevenue(item.id, item.description)}>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                           );
@@ -2890,9 +2912,25 @@ export default function App() {
                               </Button>
                             </TableCell>
                             <TableCell>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringExpense(item.id, item.description)}>
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit" onClick={() => setModal({
+                                  title: "Edit Recurring Expense",
+                                  fields: [
+                                    { name: "description", label: "Description", required: true, default: item.description },
+                                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true, default: String(item.amount) },
+                                    { name: "frequency", label: "Frequency", type: "select", options: ["monthly", "yearly"], default: item.frequency, required: true },
+                                    { name: "projectId", label: "Project (optional)", type: "select", options: projects, placeholder: "General (no project)", default: item.projectId || "" },
+                                    { name: "startDate", label: "Start Date", type: "date", default: item.startDate || "", required: true },
+                                    { name: "endDate", label: "End Date (optional)", type: "date", default: item.endDate || "" },
+                                  ],
+                                  onSubmit: (v) => editRecurringExpense(item.id, parseFloat(v.amount), v.frequency, v.description, v.startDate || null, v.endDate || null, v.projectId || null),
+                                })}>
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deleteRecurringExpense(item.id, item.description)}>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
