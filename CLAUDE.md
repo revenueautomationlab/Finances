@@ -176,6 +176,13 @@ A todo/reminder layer for incoming & outgoing obligations (domains, CR, VPS, App
 ### Daily Brief Email (cloudflare/daily-brief)
 Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the **service_role** key (bypasses RLS) and sends ONE mobile-responsive HTML email via **Resend** to `revenueautomationlab@gmail.com`, cc `saeedalsaeedbusiness@gmail.com` + `suhaibrajabo@gmail.com`. Contents: payments **due tomorrow** (the reminder) + overdue + rest-of-week, **yesterday's transactions**, and a **KPI snapshot** (`computeSnapshot()` is a faithful port of App.jsx profit/bank/margin math — keep in sync). Secrets via `wrangler secret put`: `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` (guards the `/?token=…[&send=1]` manual preview/send endpoint). Sender `reminders@mail.raltech.dev` (domain `mail.raltech.dev` verified in the Resend account revenueautomationlab@gmail.com; see worker README).
 
+### Roles, Audit & Admin (multi-user)
+- **Roles**: `app_users` (email → `reader`|`full`, status). `revenueautomationlab@gmail.com` is hard-coded to `admin` in `app_user_role()` (never lockable-out). Helpers `app_can_read()` / `app_can_write()` / `app_is_admin()`. **Role-aware RLS on all 16 data tables** (reader = SELECT only; full = read/write/delete; admin = all). `service_role` (workers) bypasses RLS.
+- **Auth**: `AuthContext.resolveAccess()` allows the admin + any active onboarded Gmail; exposes `role`/`isAdmin`/`canWrite`. Non-onboarded accounts are force-signed-out. UI write guard `guardWrite()` (RLS is the real enforcement).
+- **Audit log**: `audit_log` + AFTER row triggers (`audit_trigger`, SECURITY DEFINER) on every data table → old/new JSONB + actor email + timestamp. Admin-only SELECT; admin UPDATE only sets `reverted_at`. Per-change revert via `applyAuditRevert()` (INSERT→delete, DELETE→re-insert, UPDATE→restore old; the revert is itself audited).
+- **Admin page** (`AdminView`, admin-only nav): Users & Roles, Audit Log (filter + per-change Revert), Backups (placeholder for the Phase-2 worker: daily snapshots + OTP-gated restore + invite emails).
+- **Domain renewal cost**: `domains.renewal_cost` flows into the Payments tab outgoing totals/timeline/email (still tracking-only — not in bank/profit math).
+
 ### Key Computed Values (all via useMemo or top-level memos)
 - `projectStats` — per-project stats: `{ contractPayments, projRecurringPaid, projRecurringExpTotal, totalPaid, totalRevenue, totalExpenses, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare, unpaid, isPaid, ... }`
 - `recurringRevenueIncome` — `{ projectLinkedPaid, generalActive, total }`
