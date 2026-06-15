@@ -76,68 +76,63 @@ export function AuthProvider({ children }) {
   const isForceSigningOut = useRef(false);
 
   useEffect(() => {
-    // Check if user is already logged in
-    const checkAuth = async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+    let cancelled = false;
 
+    // Resolve a session to user+role and update state. NEVER call this synchronously inside
+    // onAuthStateChange — awaiting a DB query there deadlocks Supabase's auth lock (the
+    // "loads forever" bug). We always defer it.
+    const apply = async (session) => {
+      try {
         if (session?.user) {
           const { allowed, role: r } = await resolveAccess(session.user.email);
+          if (cancelled) return;
           if (allowed) {
             setUser(session.user);
             setRole(r);
+            setError(null);
           } else {
-            // Logged in but not onboarded — full purge
+            // Logged in but not onboarded / disabled — purge and kick to login.
             isForceSigningOut.current = true;
             await forceFullSignOut();
-            setError("Access denied. Ask the admin to add your Google account.");
-            setUser(null);
-            setRole(null);
+            if (!cancelled) {
+              setError("Access denied. Ask the admin to add your Google account.");
+              setUser(null);
+              setRole(null);
+            }
             isForceSigningOut.current = false;
           }
+        } else {
+          if (cancelled) return;
+          setUser(null);
+          setRole(null);
+          if (!isForceSigningOut.current) setError(null);
         }
-        setLoading(false);
       } catch (err) {
-        console.error("Auth check failed:", err);
-        setError(err.message);
-        setLoading(false);
+        console.error("Auth resolve failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
 
-    checkAuth();
+    // Initial check (safe to await here — not inside the auth callback).
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => apply(session))
+      .catch((err) => { console.error("getSession failed:", err); if (!cancelled) setLoading(false); });
 
-    // Listen for auth changes
+    // Auth changes: defer the (DB-touching) work out of the callback to avoid the lock deadlock.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const { allowed, role: r } = await resolveAccess(session.user.email);
-        if (allowed) {
-          setUser(session.user);
-          setRole(r);
-          setError(null);
-        } else {
-          isForceSigningOut.current = true;
-          await forceFullSignOut();
-          setError("Access denied. Ask the admin to add your Google account.");
-          setUser(null);
-          setRole(null);
-          isForceSigningOut.current = false;
-        }
-      } else {
-        setUser(null);
-        setRole(null);
-        // Don't clear the error if we're in the middle of a force sign-out
-        // (e.g. "Access denied" was just set and signOut triggered this event)
-        if (!isForceSigningOut.current) {
-          setError(null);
-        }
-      }
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      setTimeout(() => { if (!cancelled) apply(session); }, 0);
     });
 
+    // Safety net: never leave the user stuck on the loading screen.
+    const safety = setTimeout(() => { if (!cancelled) setLoading(false); }, 8000);
+
     return () => {
+      cancelled = true;
+      clearTimeout(safety);
       subscription?.unsubscribe();
     };
   }, []);

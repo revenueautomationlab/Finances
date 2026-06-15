@@ -729,9 +729,13 @@ export async function applyAuditRevert(entry) {
 // worker with the caller's Supabase JWT; the worker verifies admin + holds the service_role key.
 const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
 async function adminAction(action, body) {
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
+  // If the stored token is missing/expired, force a refresh so the worker gets a valid JWT.
+  if (!session?.access_token) {
+    ({ data: { session } } = await supabase.auth.refreshSession());
+  }
   const token = session?.access_token;
-  if (!token) throw new Error("Not signed in");
+  if (!token) throw new Error("Session expired — please sign out and sign in again");
   const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
