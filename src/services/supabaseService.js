@@ -730,9 +730,16 @@ export async function applyAuditRevert(entry) {
 const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
 async function adminAction(action, body) {
   let { data: { session } } = await supabase.auth.getSession();
-  // If the stored token is missing/expired, force a refresh so the worker gets a valid JWT.
-  if (!session?.access_token) {
-    ({ data: { session } } = await supabase.auth.refreshSession());
+  // The worker validates the JWT server-side, so a stale/expiring token is rejected (403).
+  // Refresh if it's missing or within 2 minutes of expiry. refreshSession() returns a fresh
+  // session regardless of expiry (throws only if the refresh token itself is invalid).
+  const nowSec = Math.floor(Date.now() / 1000);
+  const stale = !session?.access_token || (session?.expires_at && session.expires_at <= nowSec + 120);
+  if (stale) {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (!error && data?.session) session = data.session;
+    } catch (_) { /* fall through to the clear error below */ }
   }
   const token = session?.access_token;
   if (!token) throw new Error("Session expired — please sign out and sign in again");
