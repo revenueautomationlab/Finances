@@ -10,6 +10,15 @@ The email contains:
 
 Reads Supabase server-side with the **service_role** key (bypasses RLS). Sends via **Resend**.
 
+## Status (as of 2026-06-15)
+✅ Worker **deployed** (`ral-finance-daily-brief`, cron `0 5 * * *`). Code + KPI math tested.
+⏳ **Inert until activated** — it no-ops on each run and the manual endpoint stays 403-locked until the steps below are done:
+- [ ] Verify `raltech.dev` in Resend (DNS records)
+- [ ] `wrangler secret put SUPABASE_SERVICE_ROLE_KEY`
+- [ ] `wrangler secret put RESEND_API_KEY`
+- [ ] `wrangler secret put TRIGGER_TOKEN`
+- [ ] `wrangler deploy` + send a test via the manual URL
+
 ## One-time setup
 
 ### 1. Verify the sender domain in Resend
