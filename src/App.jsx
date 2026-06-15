@@ -48,6 +48,12 @@ import {
   deleteAppUser as dbDeleteAppUser,
   fetchAuditLog as dbFetchAuditLog,
   applyAuditRevert as dbApplyAuditRevert,
+  inviteUser as dbInviteUser,
+  fetchSnapshots as dbFetchSnapshots,
+  fetchSnapshotData as dbFetchSnapshotData,
+  takeSnapshotNow as dbTakeSnapshotNow,
+  requestRestoreOtp as dbRequestRestoreOtp,
+  restoreSnapshot as dbRestoreSnapshot,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -1476,10 +1482,47 @@ export default function App() {
     const [audit, setAudit] = useState([]);
     const [auditTable, setAuditTable] = useState("");
     const [expandedAudit, setExpandedAudit] = useState(null);
+    const [snapshots, setSnapshots] = useState([]);
+    const [backupBusy, setBackupBusy] = useState(false);
+    const [restoreId, setRestoreId] = useState(null);
+    const [otpSent, setOtpSent] = useState(false);
+    const [otpCode, setOtpCode] = useState("");
 
     const loadUsers = async () => { try { setUsers(await dbFetchAppUsers()); } catch (e) { toast.error(`Load users failed: ${e.message}`); } };
     const loadAudit = async (table = auditTable) => { try { setAudit(await dbFetchAuditLog({ limit: 200, table: table || null })); } catch (e) { toast.error(`Load audit failed: ${e.message}`); } };
-    useEffect(() => { loadUsers(); loadAudit(""); /* eslint-disable-next-line */ }, []);
+    const loadSnapshots = async () => { try { setSnapshots(await dbFetchSnapshots()); } catch (e) { toast.error(`Load backups failed: ${e.message}`); } };
+    useEffect(() => { loadUsers(); loadAudit(""); loadSnapshots(); /* eslint-disable-next-line */ }, []);
+
+    const backupNow = async () => {
+      setBackupBusy(true);
+      try { await dbTakeSnapshotNow(); await loadSnapshots(); toast.success("Backup created"); }
+      catch (e) { toast.error(`Backup failed: ${e.message}`); } finally { setBackupBusy(false); }
+    };
+    const exportSnapshot = async (id) => {
+      try {
+        const s = await dbFetchSnapshotData(id);
+        const blob = new Blob([JSON.stringify(s.data, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `ral-finance-backup-${(s.created_at || "").slice(0, 10)}-${id}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) { toast.error(`Export failed: ${e.message}`); }
+    };
+    const sendRestoreOtp = async () => {
+      try { await dbRequestRestoreOtp(); setOtpSent(true); toast.success("Confirmation code sent to revenueautomationlab@gmail.com"); }
+      catch (e) { toast.error(`Couldn't send code: ${e.message}`); }
+    };
+    const confirmRestore = async () => {
+      setBackupBusy(true);
+      try {
+        await dbRestoreSnapshot(restoreId, otpCode.trim());
+        toast.success("Database restored from backup");
+        setRestoreId(null); setOtpSent(false); setOtpCode("");
+        await refreshData(); await loadSnapshots();
+      } catch (e) { toast.error(`Restore failed: ${e.message}`); } finally { setBackupBusy(false); }
+    };
+    const snapTotal = (rc) => Object.values(rc || {}).reduce((a, n) => a + (Number(n) || 0), 0);
 
     const onboard = () => setModal({
       title: "Onboard User",
@@ -1493,8 +1536,14 @@ export default function App() {
         try {
           await dbAddAppUser(email, v.role, user?.email);
           await loadUsers();
-          toast.success(`${email} onboarded as ${v.role}. Invite email sends from the daily mailer.`);
           setModal(null);
+          try {
+            await dbInviteUser(email, v.role);
+            toast.success(`${email} onboarded as ${v.role} — invite email sent`);
+          } catch (mailErr) {
+            toast.success(`${email} onboarded as ${v.role}`);
+            toast.error(`Invite email failed: ${mailErr.message}`);
+          }
         } catch (e) { toast.error(`Failed: ${e.message}`); }
       },
     });
@@ -1647,20 +1696,57 @@ export default function App() {
           {/* BACKUPS */}
           <TabsContent value="backups" className="mt-4">
             <Card>
-              <CardHeader className="pb-4"><CardTitle className="text-base">Backups &amp; restore</CardTitle><CardDescription>Daily snapshots + OTP-gated restore</CardDescription></CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
-                  <History className="mt-0.5 h-5 w-5 text-primary shrink-0" />
-                  <div className="text-sm text-muted-foreground">
-                    <p className="font-medium text-foreground">How recovery works here</p>
-                    <ul className="mt-1.5 list-disc pl-4 space-y-1">
-                      <li>Every change is captured in the <b>Audit Log</b> — restore deleted rows or undo any edit from there (keeps all later data).</li>
-                      <li>A secure worker takes a <b>daily snapshot</b> of all data and keeps the last 30.</li>
-                      <li>Restoring a whole snapshot requires an <b>OTP sent to {user?.email}</b>.</li>
-                    </ul>
-                    <p className="mt-2 text-xs">Snapshot list &amp; one-click OTP restore appear here once the secure worker is deployed (next rollout step).</p>
-                  </div>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+                <div><CardTitle className="text-base">Backups &amp; restore</CardTitle><CardDescription>Daily snapshots (last 30 kept) · OTP-gated restore</CardDescription></div>
+                <Button size="sm" onClick={backupNow} disabled={backupBusy}>{backupBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <History className="mr-1.5 h-4 w-4" />} Back up now</Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>For everyday mistakes, prefer the <b>Audit Log</b> (revert a change / restore a deleted row while keeping later data). A full <b>Restore</b> below replaces all current data with the snapshot — a safety backup is taken automatically first, and it needs a code emailed to {user?.email}.</span>
                 </div>
+                {snapshots.length === 0 ? (
+                  <EmptyState icon={History} title="No backups yet" description='Click "Back up now", or wait for the automatic daily snapshot.' />
+                ) : (
+                  <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                      <TableHeader><TableRow className="bg-muted/50"><TableHead>When</TableHead><TableHead>By</TableHead><TableHead>Rows</TableHead><TableHead className="w-52" /></TableRow></TableHeader>
+                      <TableBody>
+                        {snapshots.map((s) => (
+                          <React.Fragment key={s.id}>
+                            <TableRow>
+                              <TableCell className="text-xs tabular-nums whitespace-nowrap">{new Date(s.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]">{s.createdBy || "—"}</TableCell>
+                              <TableCell className="text-xs tabular-nums">{snapTotal(s.rowCounts)}</TableCell>
+                              <TableCell>
+                                <div className="flex gap-1 justify-end">
+                                  <Button size="sm" variant="ghost" className="h-7" onClick={() => exportSnapshot(s.id)}>Export</Button>
+                                  <Button size="sm" variant="outline" className="h-7" onClick={() => { setRestoreId(restoreId === s.id ? null : s.id); setOtpSent(false); setOtpCode(""); }}>Restore</Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                            {restoreId === s.id && (
+                              <TableRow><TableCell colSpan={4} className="bg-red-50/50">
+                                <div className="space-y-2 py-1">
+                                  <p className="text-xs text-red-700 font-medium">Restore everything to this backup ({new Date(s.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })})? Current data will be replaced (a safety backup is taken first).</p>
+                                  {!otpSent ? (
+                                    <Button size="sm" variant="outline" className="h-8" onClick={sendRestoreOtp}>Email me a confirmation code</Button>
+                                  ) : (
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Input value={otpCode} onChange={(e) => setOtpCode(e.target.value)} placeholder="6-digit code" className="h-8 w-32" />
+                                      <Button size="sm" variant="destructive" className="h-8" disabled={backupBusy || otpCode.trim().length < 6} onClick={confirmRestore}>{backupBusy && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />} Confirm restore</Button>
+                                      <Button size="sm" variant="ghost" className="h-8" onClick={sendRestoreOtp}>Resend code</Button>
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell></TableRow>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

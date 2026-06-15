@@ -725,6 +725,38 @@ export async function applyAuditRevert(entry) {
   if (e2) throw e2;
 }
 
+// Admin worker actions (invite email, OTP, snapshot, restore). Calls the secure Cloudflare
+// worker with the caller's Supabase JWT; the worker verifies admin + holds the service_role key.
+const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
+async function adminAction(action, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error("Not signed in");
+  const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.ok) throw new Error(json.error || `Request failed (${res.status})`);
+  return json;
+}
+export const inviteUser = (email, role) => adminAction("invite", { email, role });
+export const requestRestoreOtp = () => adminAction("otp", {});
+export const restoreSnapshot = (snapshotId, code) => adminAction("restore", { snapshotId, code });
+export const takeSnapshotNow = () => adminAction("snapshot", {});
+
+export async function fetchSnapshots() {
+  const { data, error } = await supabase.from("db_snapshots").select("id,created_at,created_by,row_counts").order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map((s) => ({ id: s.id, createdAt: s.created_at, createdBy: s.created_by, rowCounts: s.row_counts || {} }));
+}
+export async function fetchSnapshotData(id) {
+  const { data, error } = await supabase.from("db_snapshots").select("data,created_at").eq("id", id).single();
+  if (error) throw error;
+  return data;
+}
+
 // Utility function to generate IDs (same as in App.jsx)
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
