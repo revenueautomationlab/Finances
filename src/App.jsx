@@ -54,6 +54,7 @@ import {
   takeSnapshotNow as dbTakeSnapshotNow,
   requestRestoreOtp as dbRequestRestoreOtp,
   restoreSnapshot as dbRestoreSnapshot,
+  fetchResendUsage as dbFetchResendUsage,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -1487,11 +1488,14 @@ export default function App() {
     const [restoreId, setRestoreId] = useState(null);
     const [otpSent, setOtpSent] = useState(false);
     const [otpCode, setOtpCode] = useState("");
+    const [usage, setUsage] = useState(null);
+    const [usageBusy, setUsageBusy] = useState(false);
 
     const loadUsers = async () => { try { setUsers(await dbFetchAppUsers()); } catch (e) { toast.error(`Load users failed: ${e.message}`); } };
     const loadAudit = async (table = auditTable) => { try { setAudit(await dbFetchAuditLog({ limit: 200, table: table || null })); } catch (e) { toast.error(`Load audit failed: ${e.message}`); } };
     const loadSnapshots = async () => { try { setSnapshots(await dbFetchSnapshots()); } catch (e) { toast.error(`Load backups failed: ${e.message}`); } };
-    useEffect(() => { loadUsers(); loadAudit(""); loadSnapshots(); /* eslint-disable-next-line */ }, []);
+    const loadUsage = async () => { setUsageBusy(true); try { setUsage(await dbFetchResendUsage()); } catch (e) { toast.error(`Email usage failed: ${e.message}`); } finally { setUsageBusy(false); } };
+    useEffect(() => { loadUsers(); loadAudit(""); loadSnapshots(); loadUsage(); /* eslint-disable-next-line */ }, []);
 
     const backupNow = async () => {
       setBackupBusy(true);
@@ -1574,6 +1578,37 @@ export default function App() {
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight"><ShieldCheck className="h-6 w-6 text-primary" /> Admin</h1>
           <p className="text-sm text-muted-foreground">Manage who can access the system, review every change, and revert mistakes. Visible only to {user?.email}.</p>
         </div>
+
+        {/* Email quota (Resend) */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Email quota — Resend</p>
+                <p className="text-xs text-muted-foreground">{usage?.updatedAt ? `As of ${new Date(usage.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "Updates whenever an email is sent"}</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={loadUsage} disabled={usageBusy}>{usageBusy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1.5 h-4 w-4" />} Refresh</Button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[{ label: "Today", used: usage?.dailyUsed, limit: usage?.dailyLimit, rem: usage?.dailyRemaining }, { label: "This month", used: usage?.monthlyUsed, limit: usage?.monthlyLimit, rem: usage?.monthlyRemaining }].map((q) => {
+                const pct = q.used != null && q.limit ? Math.min(100, Math.round((q.used / q.limit) * 100)) : 0;
+                const danger = pct >= 90, warn = pct >= 70;
+                return (
+                  <div key={q.label} className="rounded-lg border p-3">
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">{q.label}</span>
+                      <span className="text-sm font-semibold tabular-nums">{q.used != null ? `${q.used} / ${q.limit}` : `— / ${q.limit ?? "?"}`}</span>
+                    </div>
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+                      <div className={cn("h-full rounded-full", danger ? "bg-red-500" : warn ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="mt-1.5 text-xs text-muted-foreground">{q.rem != null ? `${q.rem} remaining` : "Send an email to populate"}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
 
         <Tabs value={adminTab} onValueChange={setAdminTab}>
           <TabsList>

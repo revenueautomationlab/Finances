@@ -756,6 +756,7 @@ export const inviteUser = (email, role) => adminAction("invite", { email, role }
 export const requestRestoreOtp = () => adminAction("otp", {});
 export const restoreSnapshot = (snapshotId, code) => adminAction("restore", { snapshotId, code });
 export const takeSnapshotNow = () => adminAction("snapshot", {});
+export const fetchResendUsage = () => adminAction("resend-usage", {});
 
 export async function fetchSnapshots() {
   const { data, error } = await supabase.from("db_snapshots").select("id,created_at,created_by,row_counts").order("created_at", { ascending: false });
