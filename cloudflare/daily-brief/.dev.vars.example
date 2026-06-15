@@ -1,0 +1,11 @@
+# Template for local Worker secrets — copy to `.dev.vars` (gitignored) and fill in real values
+# for `wrangler dev`. In production these are set via `wrangler secret put` (encrypted), NOT here.
+
+# Resend API key — account: revenueautomationlab@gmail.com · verified domain: mail.raltech.dev
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Supabase service_role key — project mssxrafomjlzoypjvjdu (server-side read, bypasses RLS)
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...service_role...
+
+# Guards the manual /preview + /send fetch endpoint
+TRIGGER_TOKEN=choose-a-random-string
