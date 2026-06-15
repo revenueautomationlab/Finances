@@ -4,32 +4,42 @@ import { supabase } from "../services/supabaseService";
 const AuthContext = createContext(null);
 
 const ADMIN_EMAIL = "revenueautomationlab@gmail.com";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 /**
- * Decide whether a signed-in email may use the app, and at what role.
+ * Decide whether a signed-in session may use the app, and at what role.
  * - The admin email is always allowed (role "admin") — never lockable-out.
- * - Anyone else must have an active row in app_users (reader/full).
+ * - Anyone else must have an active row in app_users (reader/full/admin).
+ *
+ * IMPORTANT: queries app_users with the SESSION'S OWN access token (direct REST), not the supabase
+ * client. Right after the OAuth callback the client may not have attached the new session yet, so a
+ * client query would run unauthenticated, the RLS "read own row" policy returns nothing, and the
+ * user gets wrongly force-signed-out (logs in for a second, then bounced to /login). Using the
+ * token explicitly removes that race entirely.
  */
-async function resolveAccess(email) {
+async function resolveAccess(session) {
+  const email = session?.user?.email;
   if (!email) return { allowed: false, role: null };
   if (email === ADMIN_EMAIL) return { allowed: true, role: "admin" };
-  // Retry once: right after OAuth the client session may not be attached yet, so the RLS-guarded
-  // app_users query can momentarily return nothing — without the retry an authorized user would be
-  // wrongly force-signed-out. A genuinely unauthorized user still returns empty on both attempts.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const token = session?.access_token;
+  if (!token) return { allowed: false, role: null };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const { data, error } = await supabase
-        .from("app_users")
-        .select("role,status")
-        .eq("email", email)
-        .maybeSingle();
-      if (error) throw error;
-      if (data && data.status === "active") return { allowed: true, role: data.role };
-      if (data) return { allowed: false, role: null }; // row exists but disabled → definitive
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/app_users?select=role,status&email=eq.${encodeURIComponent(email)}`,
+        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` } },
+      );
+      if (res.ok) {
+        const rows = await res.json();
+        if (rows.length && rows[0].status === "active") return { allowed: true, role: rows[0].role };
+        if (rows.length) return { allowed: false, role: null }; // disabled → definitive
+        // empty with a valid token = genuinely not onboarded; brief retry guards against replica lag
+      }
     } catch (err) {
       console.error(`Role lookup failed (attempt ${attempt}):`, err);
     }
-    if (attempt === 0) await new Promise((r) => setTimeout(r, 600));
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
   }
   return { allowed: false, role: null };
 }
@@ -92,7 +102,7 @@ export function AuthProvider({ children }) {
     const apply = async (session) => {
       try {
         if (session?.user) {
-          const { allowed, role: r } = await resolveAccess(session.user.email);
+          const { allowed, role: r } = await resolveAccess(session);
           if (cancelled) return;
           if (allowed) {
             setUser(session.user);
