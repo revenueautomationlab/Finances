@@ -12,22 +12,17 @@ Reads Supabase server-side with the **service_role** key (bypasses RLS). Sends v
 
 ## Status (as of 2026-06-15)
 ✅ Worker **deployed** (`ral-finance-daily-brief`, cron `0 5 * * *`). Code + KPI math tested.
-⏳ **Inert until activated** — it no-ops on each run and the manual endpoint stays 403-locked until the steps below are done:
-- [ ] Verify `raltech.dev` in Resend (DNS records)
-- [ ] `wrangler secret put SUPABASE_SERVICE_ROLE_KEY`
-- [ ] `wrangler secret put RESEND_API_KEY`
-- [ ] `wrangler secret put TRIGGER_TOKEN`
-- [ ] `wrangler deploy` + send a test via the manual URL
+✅ Sender domain `mail.raltech.dev` verified in Resend (account: revenueautomationlab@gmail.com); `MAIL_FROM = reminders@mail.raltech.dev`.
+✅ `TRIGGER_TOKEN` secret set.
+⏳ **Two secrets left** — until both are set the worker no-ops and the manual endpoint stays 403-locked:
+- [ ] `wrangler secret put RESEND_API_KEY`        (Resend → API Keys)
+- [ ] `wrangler secret put SUPABASE_SERVICE_ROLE_KEY`  (Supabase → Project Settings → API → service_role)
+- [ ] then send a test via the manual URL (setting a secret auto-redeploys — no separate deploy needed)
 
 ## One-time setup
 
-### 1. Verify the sender domain in Resend
-The brief sends from `reminders@raltech.dev`. To email all three recipients, `raltech.dev` must be a **verified domain** in Resend:
-1. Resend dashboard → **Domains** → **Add Domain** → `raltech.dev`.
-2. Add the shown DNS records (MX/TXT for SPF + DKIM, and a DMARC TXT) in **Cloudflare DNS** for `raltech.dev`.
-3. Wait for **Verified**. (Free plan: 3,000 emails/mo, 100/day — far more than one daily brief.)
-
-> No domain yet? Temporarily set `MAIL_FROM = "RAL Finance <onboarding@resend.dev>"` and `MAIL_TO`/`MAIL_CC` to your **own** Resend account email — `onboarding@resend.dev` only delivers to yourself. Switch to `reminders@raltech.dev` once verified.
+### 1. Sender domain (done)
+The brief sends from `reminders@mail.raltech.dev`. `mail.raltech.dev` is already a **verified domain** in the Resend account (revenueautomationlab@gmail.com). Any address on that domain works as the `from`. Free plan: 3,000 emails/mo, 100/day — far more than one daily brief.
 
 ### 2. Set secrets (never committed)
 From this directory:

@@ -9,7 +9,7 @@ crons = ["0 5 * * *"]
 [vars]
 # Public, non-secret config.
 SUPABASE_URL = "https://mssxrafomjlzoypjvjdu.supabase.co"
-MAIL_FROM = "RAL Finance <reminders@raltech.dev>"
+MAIL_FROM = "RAL Finance <reminders@mail.raltech.dev>"
 MAIL_TO = "revenueautomationlab@gmail.com"
 MAIL_CC = "saeedalsaeedbusiness@gmail.com,suhaibrajabo@gmail.com"
 
