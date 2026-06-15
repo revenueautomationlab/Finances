@@ -168,6 +168,11 @@ const PAYMENT_FREQUENCIES = [
 ];
 const frequencyLabel = (id) => PAYMENT_FREQUENCIES.find((f) => f.id === id)?.name || id;
 
+// How far ahead a payment starts showing as "due soon" / triggers reminders, by cadence:
+// monthly = 2 weeks before, yearly = 3 months before, one-time = 30 days before.
+const paymentLeadDays = (frequency) => (frequency === "monthly" ? 14 : frequency === "one_time" ? 30 : 90);
+const leadLabel = (frequency) => (frequency === "monthly" ? "2 weeks ahead" : frequency === "one_time" ? "30 days ahead" : "3 months ahead");
+
 const toISODate = (date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
@@ -214,7 +219,13 @@ const paymentItemStatus = (item, paidPeriods) => {
   const nextDue = unpaidRelevant.length ? unpaidRelevant[0] : null;
   const overdueCount = unpaidRelevant.filter((o) => o < today).length;
   const paidCount = occurrences.filter((o) => paidPeriods.has(o)).length;
-  return { occurrences, nextDue, overdueCount, paidCount, settled: nextDue === null };
+  // The "current period" = the cycle covering today (anchor), or the first cycle if it hasn't started.
+  const currentPeriod = anchorIdx >= 0 ? occurrences[anchorIdx] : (occurrences[0] || null);
+  const currentPaid = currentPeriod ? paidPeriods.has(currentPeriod) : false;
+  const curIdx = currentPeriod ? occurrences.indexOf(currentPeriod) : -1;
+  // The next time a payment becomes due after the current one (when it's "next available to pay").
+  const nextPeriod = curIdx >= 0 ? (occurrences[curIdx + 1] || null) : null;
+  return { occurrences, nextDue, overdueCount, paidCount, settled: nextDue === null, currentPeriod, currentPaid, nextPeriod };
 };
 
 const initialState = {
@@ -2662,13 +2673,15 @@ export default function App() {
   }
 
   // --- Domains View ---
-  // Color for a due-date badge by urgency.
-  const dueBadgeClass = (days) =>
+  // Color for a due-date badge by urgency, relative to the item's own reminder lead time.
+  const dueBadgeClass = (days, lead = 30) =>
     days === null ? "bg-muted text-muted-foreground hover:bg-muted"
       : days < 0 ? "bg-red-100 text-red-700 hover:bg-red-100"
-      : days <= 7 ? "bg-orange-100 text-orange-700 hover:bg-orange-100"
-      : days <= 30 ? "bg-amber-100 text-amber-700 hover:bg-amber-100"
+      : days <= Math.max(3, Math.round(lead / 3)) ? "bg-orange-100 text-orange-700 hover:bg-orange-100"
+      : days <= lead ? "bg-amber-100 text-amber-700 hover:bg-amber-100"
       : "bg-emerald-100 text-emerald-700 hover:bg-emerald-100";
+  // Reminder lead for a timeline entry (domains renew yearly → 3 months).
+  const entryLead = (e) => (e.kind === "domain" ? 90 : paymentLeadDays(e.item.frequency));
 
   function PaymentsView() {
     const paymentFields = (defaults = {}) => [
@@ -2693,17 +2706,18 @@ export default function App() {
       onSubmit: (v) => editPaymentItem(item.id, v.direction, item.category || "other", v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, item.active, v.notes || null),
     });
 
-    // Summary stats (informational only)
-    const dueThisWeek = paymentTimeline.filter((e) => e.days !== null && e.days >= 0 && e.days <= 7).length;
+    // "Due soon" = within the item's own reminder lead (monthly 2wk, yearly 3mo, one-time 30d).
+    const inWindow = (e) => e.days !== null && e.days >= 0 && e.days <= entryLead(e);
+    const dueSoonCount = paymentTimeline.filter(inWindow).length;
     const overdueCount = paymentTimeline.filter((e) => e.days !== null && e.days < 0).length;
-    const out30 = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "outgoing" && e.days !== null && e.days <= 30).reduce((a, e) => a + e.item.amount, 0);
-    const in30 = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "incoming" && e.days !== null && e.days <= 30).reduce((a, e) => a + e.item.amount, 0);
+    const outSoon = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "outgoing" && (inWindow(e) || e.days < 0)).reduce((a, e) => a + e.item.amount, 0);
+    const inSoon = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "incoming" && (inWindow(e) || e.days < 0)).reduce((a, e) => a + e.item.amount, 0);
 
+    // Frequency-aware groups: an item only enters "Due soon" once inside its lead window.
     const buckets = [
-      { key: "overdue", label: "Overdue", test: (d) => d !== null && d < 0 },
-      { key: "week", label: "This week", test: (d) => d !== null && d >= 0 && d <= 7 },
-      { key: "month", label: "Next 30 days", test: (d) => d !== null && d > 7 && d <= 30 },
-      { key: "later", label: "Later", test: (d) => d === null || d > 30 },
+      { key: "overdue", label: "Overdue", test: (e) => e.days !== null && e.days < 0 },
+      { key: "soon", label: "Due soon", test: (e) => inWindow(e) },
+      { key: "scheduled", label: "Scheduled (not due yet)", test: (e) => e.days === null || e.days > entryLead(e) },
     ];
 
     const DirectionIcon = ({ entry, className }) => {
@@ -2739,7 +2753,7 @@ export default function App() {
               : <p className="text-xs text-muted-foreground">renewal</p>}
             <p className="text-[11px] text-muted-foreground tabular-nums">{formatDate(entry.dueDate)}</p>
           </div>
-          <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(entry.days))}>{formatExpiryDistance(entry.days)}</Badge>
+          <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(entry.days, entryLead(entry)))}>{formatExpiryDistance(entry.days)}</Badge>
           {entry.kind === "schedule" ? (
             <Button size="sm" variant="outline" className="h-8 shrink-0" disabled={loading} onClick={() => togglePaymentPaid(entry.item, entry.dueDate, null)}>
               <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark paid
@@ -2765,14 +2779,13 @@ export default function App() {
         <div className="space-y-2">
           {items.map((item) => {
             const paid = paidPeriodsByScheduleItem[item.id] || new Set();
-            const { nextDue, overdueCount, paidCount, occurrences, settled } = paymentItemStatus(item, paid);
+            const { overdueCount, paidCount, occurrences, currentPeriod, currentPaid, nextPeriod } = paymentItemStatus(item, paid);
             const project = projects.find((p) => p.id === item.projectId);
-            const days = nextDue ? daysUntil(nextDue) : null;
             const expanded = paymentsExpandedId === item.id;
-            const paidRecords = paymentSchedulePayments
-              .filter((pp) => pp.paymentScheduleId === item.id)
-              .sort((a, b) => a.periodDate.localeCompare(b.periodDate));
-            const lastPaid = paidRecords[paidRecords.length - 1];
+            const lead = paymentLeadDays(item.frequency);
+            const currentDays = currentPeriod ? daysUntil(currentPeriod) : null;
+            // the saved payment for the current period (lets us toggle it back to unpaid)
+            const currentPayment = paymentSchedulePayments.find((pp) => pp.paymentScheduleId === item.id && pp.periodDate === currentPeriod);
             return (
               <div key={item.id} className={cn("rounded-lg border", !item.active && "opacity-60")}>
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -2793,21 +2806,40 @@ export default function App() {
                       {` · ✓ ${paidCount} paid`}
                     </p>
                   </div>
-                  <div className="text-right shrink-0 hidden sm:block">
-                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{settled ? "Settled" : "Next due"}</p>
-                    <p className="text-xs tabular-nums">{nextDue ? formatDate(nextDue) : "—"}</p>
-                  </div>
-                  {item.active && nextDue && <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(days))}>{formatExpiryDistance(days)}</Badge>}
-                  <div className="flex items-center gap-1 shrink-0">
-                    {item.active && nextDue && (
-                      <Button size="sm" variant="outline" className="h-8" disabled={loading} onClick={() => togglePaymentPaid(item, nextDue, null)}>
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark paid
-                      </Button>
+                  <div className="text-right shrink-0 hidden sm:block min-w-[92px]">
+                    {currentPaid ? (
+                      <>
+                        <p className="text-[11px] uppercase tracking-wide text-emerald-600">Paid this period</p>
+                        <p className="text-xs tabular-nums text-muted-foreground flex items-center gap-1 justify-end">
+                          <Clock className="h-3 w-3" />{nextPeriod ? `Next ${formatDate(nextPeriod)}` : "No further dues"}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{currentDays !== null && currentDays < 0 ? "Overdue" : "Due"}</p>
+                        <p className="text-xs tabular-nums">{currentPeriod ? formatDate(currentPeriod) : "—"}</p>
+                      </>
                     )}
-                    {lastPaid && (
-                      <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" disabled={loading} onClick={() => togglePaymentPaid(item, lastPaid.periodDate, lastPaid)} title={`Undo paid: ${formatDate(lastPaid.periodDate)}`}>
-                        <RotateCcw className="mr-1 h-3.5 w-3.5" /> Unpay
-                      </Button>
+                  </div>
+                  {item.active && currentPeriod && !currentPaid && (
+                    <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(currentDays, lead))}>{formatExpiryDistance(currentDays)}</Badge>
+                  )}
+                  {item.active && currentPaid && (
+                    <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 shrink-0 gap-1" title={nextPeriod ? "Next available to pay" : undefined}>
+                      <Clock className="h-3 w-3" />{nextPeriod ? formatDate(nextPeriod) : "done"}
+                    </Badge>
+                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {item.active && currentPeriod && (
+                      currentPaid ? (
+                        <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" disabled={loading} onClick={() => togglePaymentPaid(item, currentPeriod, currentPayment)} title={`Mark ${formatPeriodLabel(currentPeriod, item.frequency)} unpaid`}>
+                          <RotateCcw className="mr-1 h-3.5 w-3.5" /> Mark unpaid
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" className="h-8" disabled={loading} onClick={() => togglePaymentPaid(item, currentPeriod, null)}>
+                          <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark paid
+                        </Button>
+                      )
                     )}
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(item)} title="Edit"><Pencil className="h-3.5 w-3.5" /></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPaymentItemActive(item)} title={item.active ? "Close / end" : "Reopen"}>
@@ -2861,6 +2893,9 @@ export default function App() {
             <p className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
               <ListChecks className="h-3.5 w-3.5" /> Tracking &amp; reminders only — does not affect bank balances, profit or margins.
             </p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              <Clock className="mr-1 inline h-3 w-3" /> Reminder lead time: <b>monthly</b> shows 2 weeks before · <b>yearly</b> shows 3 months before · <b>one-time</b> 30 days before. Items leave “Due soon” once you mark the current period paid.
+            </p>
           </div>
           <Button onClick={() => openAdd("outgoing")}>
             <Plus className="mr-1.5 h-4 w-4" /> Add Payment
@@ -2868,10 +2903,10 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={CalendarClock} label="Due This Week" value={String(dueThisWeek)} variant={dueThisWeek > 0 ? "highlight" : "default"} />
+          <StatCard icon={CalendarClock} label="Due Soon" value={String(dueSoonCount)} variant={dueSoonCount > 0 ? "highlight" : "default"} sub="Within reminder window" />
           <StatCard icon={AlertTriangle} label="Overdue" value={String(overdueCount)} variant={overdueCount > 0 ? "expense" : "default"} />
-          <StatCard icon={ArrowUpRight} label="Outgoing ≤ 30 days" value={currency(out30)} variant="expense" />
-          <StatCard icon={ArrowDownRight} label="Incoming ≤ 30 days" value={currency(in30)} variant="income" />
+          <StatCard icon={ArrowUpRight} label="Outgoing due soon" value={currency(outSoon)} variant="expense" />
+          <StatCard icon={ArrowDownRight} label="Incoming due soon" value={currency(inSoon)} variant="income" />
         </div>
 
         <Tabs value={paymentsTab} onValueChange={setPaymentsTab}>
@@ -2890,7 +2925,7 @@ export default function App() {
             ) : (
               <div className="space-y-5">
                 {buckets.map((bucket) => {
-                  const entries = paymentTimeline.filter((e) => bucket.test(e.days));
+                  const entries = paymentTimeline.filter((e) => bucket.test(e));
                   if (entries.length === 0) return null;
                   return (
                     <div key={bucket.key}>
