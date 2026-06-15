@@ -3073,6 +3073,14 @@ export default function App() {
     const outSoon = paymentTimeline.filter((e) => (inWindow(e) || e.days < 0) && (e.kind === "domain" || e.item.direction === "outgoing")).reduce((a, e) => a + (e.kind === "domain" ? (e.domain.renewalCost || 0) : e.item.amount), 0);
     const inSoon = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "incoming" && (inWindow(e) || e.days < 0)).reduce((a, e) => a + e.item.amount, 0);
 
+    // Annualized totals (run-rate): monthly ×12, yearly ×1; one-time excluded (not recurring).
+    const activeSched = paymentSchedule.filter((i) => i.active);
+    const annualize = (i) => i.frequency === "monthly" ? i.amount * 12 : i.frequency === "yearly" ? i.amount : 0;
+    const domainAnnual = domains.reduce((a, d) => a + (d.renewalCost || 0), 0); // domains renew yearly
+    const yearOutgoing = activeSched.filter((i) => i.direction === "outgoing").reduce((a, i) => a + annualize(i), 0) + domainAnnual;
+    const yearIncoming = activeSched.filter((i) => i.direction === "incoming").reduce((a, i) => a + annualize(i), 0);
+    const yearNet = yearIncoming - yearOutgoing;
+
     // Frequency-aware groups: an item only enters "Due soon" once inside its lead window.
     const buckets = [
       { key: "overdue", label: "Overdue", test: (e) => e.days !== null && e.days < 0 },
@@ -3260,6 +3268,14 @@ export default function App() {
           <Button onClick={() => openAdd("outgoing")}>
             <Plus className="mr-1.5 h-4 w-4" /> Add Payment
           </Button>
+        </div>
+
+        {/* Annualized totals across all active obligations */}
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={ArrowDownRight} label="Incoming / year" value={currency(yearIncoming)} variant="income" sub="All active incoming, annualized" />
+          <StatCard icon={ArrowUpRight} label="Outgoing / year" value={currency(yearOutgoing)} variant="expense" sub="Recurring + domains, annualized" />
+          <StatCard icon={Wallet} label="Net / year" value={currency(yearNet)} variant={yearNet >= 0 ? "bank" : "expense"} sub="Incoming − outgoing" />
+          <StatCard icon={CalendarClock} label="Outgoing / month" value={currency(yearOutgoing / 12)} variant="expense" sub="Monthly run-rate" />
         </div>
 
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
