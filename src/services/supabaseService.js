@@ -34,6 +34,8 @@ export async function fetchState() {
       { data: recurringRevenuePayments },
       { data: recurringExpensePayments },
       { data: domains },
+      { data: paymentSchedule },
+      { data: paymentSchedulePayments },
     ] = await Promise.all([
       supabase.from("projects").select("*, payments(*), expenses(*)"),
       supabase.from("bank_spending").select("*"),
@@ -46,6 +48,8 @@ export async function fetchState() {
       supabase.from("recurring_revenue_payments").select("*"),
       supabase.from("recurring_expense_payments").select("*"),
       supabase.from("domains").select("*"),
+      supabase.from("payment_schedule").select("*"),
+      supabase.from("payment_schedule_payments").select("*"),
     ]);
 
     const transformedProjects = projects.map((p) => ({
@@ -160,6 +164,28 @@ export async function fetchState() {
         autoRenew: d.auto_renew,
         notes: d.notes,
         createdAt: d.created_at,
+      })),
+      paymentSchedule: (paymentSchedule || []).map((p) => ({
+        id: p.id,
+        direction: p.direction,
+        category: p.category,
+        name: p.name,
+        amount: parseFloat(p.amount),
+        frequency: p.frequency,
+        startDate: p.start_date,
+        endDate: p.end_date,
+        projectId: p.project_id,
+        active: p.active,
+        notes: p.notes,
+        createdAt: p.created_at,
+      })),
+      paymentSchedulePayments: (paymentSchedulePayments || []).map((pp) => ({
+        id: pp.id,
+        paymentScheduleId: pp.payment_schedule_id,
+        periodDate: pp.period_date,
+        paidDate: pp.paid_date,
+        note: pp.note,
+        createdAt: pp.created_at,
       })),
     };
   } catch (error) {
@@ -579,6 +605,61 @@ export async function addRecurringExpensePayment(recurringExpenseId, projectId, 
 
 export async function deleteRecurringExpensePayment(id) {
   const { error } = await supabase.from("recurring_expense_payments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Payment schedule operations (tracking-only; does NOT affect bank/money calcs)
+export async function addPaymentSchedule(direction, category, name, amount, frequency, startDate, endDate, projectId, notes) {
+  const { data, error } = await supabase
+    .from("payment_schedule")
+    .insert([
+      {
+        id: generateId(),
+        direction,
+        category,
+        name,
+        amount,
+        frequency,
+        start_date: startDate,
+        end_date: endDate || null,
+        project_id: projectId || null,
+        notes: notes || null,
+      },
+    ])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function updatePaymentSchedule(id, direction, category, name, amount, frequency, startDate, endDate, projectId, active, notes) {
+  const update = { direction, category, name, amount, frequency, start_date: startDate, end_date: endDate || null, project_id: projectId || null, notes: notes || null };
+  if (active !== undefined) update.active = active;
+  const { error } = await supabase.from("payment_schedule").update(update).eq("id", id);
+  if (error) throw error;
+}
+
+export async function setPaymentScheduleActive(id, active) {
+  const { error } = await supabase.from("payment_schedule").update({ active }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deletePaymentSchedule(id) {
+  const { error } = await supabase.from("payment_schedule").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Mark a single due occurrence paid / unpaid (the "todo done" toggle)
+export async function addPaymentSchedulePayment(paymentScheduleId, periodDate, paidDate, note) {
+  const { data, error } = await supabase
+    .from("payment_schedule_payments")
+    .insert([{ id: generateId(), payment_schedule_id: paymentScheduleId, period_date: periodDate, paid_date: paidDate || null, note: note || null }])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deletePaymentSchedulePayment(id) {
+  const { error } = await supabase.from("payment_schedule_payments").delete().eq("id", id);
   if (error) throw error;
 }
 

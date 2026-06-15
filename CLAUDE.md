@@ -37,13 +37,19 @@ supabase/
     ├── 20260320040000_recurring.sql ........ Recurring revenue + expenses tables
     ├── 20260320050000_recurring_payments.sql .. Period-paid tracking tables
     ├── 20260320060000_recurring_nullable_dates.sql .. Make start_date / next_due nullable
-    └── 20260510000000_dividends_domains_expiries.sql .. partner_dividends, domains, end_date columns
+    ├── 20260510000000_dividends_domains_expiries.sql .. partner_dividends, domains, end_date columns
+    └── 20260615000000_payment_schedule.sql .. payment_schedule + payment_schedule_payments (tracking layer) + sample seed
 
 cloudflare/
-└── keep-alive/
-    ├── wrangler.toml .............. Worker config — cron `0 8 */3 * *`, [vars] hold public Supabase URL + anon key
+├── keep-alive/
+│   ├── wrangler.toml .............. Worker config — cron `0 8 * * *` (daily 08:00 UTC), [vars] hold public Supabase URL + anon key
+│   └── src/
+│       └── index.js ............... Worker that pings Supabase `/rest/v1/projects` daily (real DB query — counts as activity), falls back to `/auth/v1/health`, to prevent free-tier pausing
+└── daily-brief/
+    ├── wrangler.toml .............. Worker config — cron `0 5 * * *` (08:00 Asia/Bahrain), [vars] hold Supabase URL + MAIL_FROM/TO/CC
+    ├── README.md ................. Setup: Resend domain verification + `wrangler secret put` steps + manual test URL
     └── src/
-        └── index.js ............... Worker that pings Supabase `/auth/v1/health` every 3 days to prevent free-tier pausing
+        └── index.js ............... Daily brief email: reads DB via service_role, sends ONE mobile-responsive email via Resend — payments due tomorrow + this week, yesterday's transactions, KPI snapshot
 
 .github/
 └── workflows/
@@ -66,6 +72,8 @@ Tables:
 - `recurring_revenue_payments` — paid period records for project-linked recurring revenue (UNIQUE on recurring_revenue_id+period_date)
 - `recurring_expense_payments` — paid period records for project-linked recurring expenses (UNIQUE on recurring_expense_id+period_date)
 - `domains` — owned domains with `expiry_date`, optional `project_id` and `recurring_revenue_id` links, `registrar`, `auto_renew`, `notes`
+- `payment_schedule` — **tracking-only** payment todos (NOT money). `direction` ('incoming'/'outgoing'), `category` (domain/cr/vps/hosting/apple/android/amc/other), `name`, `amount`, `frequency` (monthly/yearly/one_time), `start_date`, optional `end_date`, nullable `project_id`, `active` (false = closed/ended), `notes`
+- `payment_schedule_payments` — one row per due occurrence marked paid (the "todo done" record); UNIQUE on (payment_schedule_id, period_date), CASCADE delete
 
 All tables have:
 - RLS enabled (authenticated users only)
@@ -157,6 +165,17 @@ Distinction between business costs and money paid to ourselves matters for margi
 - Severity levels: `overdue` (negative days), `urgent` (≤ 30d for domains, ≤ ⅓ threshold for recurring), `soon` otherwise.
 - Rendered as `<ExpiryAlertsBanner>` at the top of the Dashboard.
 
+### Payment Tracking (tracking-only — NEVER affects money)
+A todo/reminder layer for incoming & outgoing obligations (domains, CR, VPS, Apple/Android, AMC, etc.). **Deliberately isolated from all bank/profit/margin math** — `paymentSchedule`/`paymentSchedulePayments` appear only in their own memos + `PaymentsView`, never in `globalBank`, `projectStats`, `operatingOutflow`, `bankSpendable`, or `totalPhysicalBank`.
+- **Occurrences**: `generatePaymentOccurrences(startDate, frequency, endDate)` generates actual due dates (monthly/yearly preserving day-of-month, clamped to month end; `one_time` = single date) from `start_date` up to a horizon, bounded by `end_date`.
+- **`paymentItemStatus(item, paidPeriods)`**: "next due" anchors on the CURRENT cycle (latest occurrence ≤ today) + future cycles — older unpaid cycles stay in the history panel but don't nag. Returns `{ occurrences, nextDue, overdueCount, paidCount, settled }`.
+- **Mark paid**: a `payment_schedule_payments` row for (item, period_date). Marking the current due paid advances `nextDue` to the next cycle — recurs until `end_date` or until `active` is set false ("Close / End"). `one_time` becomes settled once paid.
+- **Domains** are folded into the Payments tab as a category, read from the `domains` table (renewal due = `expiry_date`); "Renew" bumps `expiry_date` +1 year. Domain expiry still drives `expiryAlerts` independently.
+- **Memos**: `paidPeriodsByScheduleItem` (Set per item), `paymentTimeline` (next unpaid occurrence per active item + domain renewals, sorted by date), `paymentsBadgeCount` (entries due ≤14 days — the sidebar badge).
+
+### Daily Brief Email (cloudflare/daily-brief)
+Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the **service_role** key (bypasses RLS) and sends ONE mobile-responsive HTML email via **Resend** to `revenueautomationlab@gmail.com`, cc `saeedalsaeedbusiness@gmail.com` + `suhaibrajabo@gmail.com`. Contents: payments **due tomorrow** (the reminder) + overdue + rest-of-week, **yesterday's transactions**, and a **KPI snapshot** (`computeSnapshot()` is a faithful port of App.jsx profit/bank/margin math — keep in sync). Secrets via `wrangler secret put`: `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` (guards the `/?token=…[&send=1]` manual preview/send endpoint). Sender `reminders@raltech.dev` requires `raltech.dev` verified in Resend (see worker README).
+
 ### Key Computed Values (all via useMemo or top-level memos)
 - `projectStats` — per-project stats: `{ contractPayments, projRecurringPaid, projRecurringExpTotal, totalPaid, totalRevenue, totalExpenses, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare, unpaid, isPaid, ... }`
 - `recurringRevenueIncome` — `{ projectLinkedPaid, generalActive, total }`
@@ -180,7 +199,7 @@ Distinction between business costs and money paid to ourselves matters for margi
 4. **Bank Savings** — Total in bank, bank inflow/outflow/spendable, bank pool composition (inflow & outflow lines), partner dividends payout & history, spending history, project contributions, recurring impact
 5. **Budgets** — Budget cards with progress bars, spending tracking, CRUD
 6. **Recurring** — Revenue + expenses tables with frequency, project, end-date column (yellow when within reminder threshold), active/pause, full CRUD. Add-revenue modal supports optional inline domain creation.
-7. **Domains** — Full CRUD list of owned domains with expiry countdown badges, optional links to projects + recurring revenue, registrar, auto-renew, notes
+7. **Payments** — Tracking-only payment todos (does not affect money). Header note states this. Stat cards (Due This Week / Overdue / Outgoing ≤30d / Incoming ≤30d). Sub-tabs: **Upcoming** (timeline grouped Overdue / This week / Next 30 days / Later — next unpaid occurrence per active item + domain renewals, with Mark-paid / Renew), **Outgoing** + **Incoming** (management lists: next due, status, ✓N paid, edit/close-reopen/delete, expandable per-occurrence history toggle), **Domains** (the folded-in `<DomainsView embedded />` — full domain CRUD). Sidebar nav shows a badge of items due ≤14 days.
 8. **Reports** — Monthly P&L (contract + recurring revenue), Partner Summary (earned/withdrawn/dividends), Budget Utilization, Recurring Obligations, Cash Flow Summary (with dividends + recurring lines), Project Performance
 9. **Secret Investment** — Secret investment share (project profit 25%), spending, balance, spending history
 
@@ -213,4 +232,5 @@ Distinction between business costs and money paid to ourselves matters for margi
 - **Always update memory files** in the memory directory when learning new project context
 - **DB changes** always go through migration files — never modify the DB directly
 - **Keep Supabase free tier alive** via the Cloudflare Worker at `cloudflare/keep-alive/` (deploy with `npx wrangler deploy` from that dir)
+- **Daily brief email** worker at `cloudflare/daily-brief/` — deploy with `npx wrangler deploy`; needs secrets `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` set via `wrangler secret put` (never commit them). If App.jsx profit/bank formulas change, update the worker's `computeSnapshot()` to match.
 - Supabase project ref: `mssxrafomjlzoypjvjdu`

@@ -1,0 +1,19 @@
+name = "ral-finance-daily-brief"
+main = "src/index.js"
+compatibility_date = "2026-05-09"
+
+[triggers]
+# 05:00 UTC = 08:00 Asia/Bahrain (UTC+3, no DST). Sends the daily brief + next-day payment reminders.
+crons = ["0 5 * * *"]
+
+[vars]
+# Public, non-secret config.
+SUPABASE_URL = "https://mssxrafomjlzoypjvjdu.supabase.co"
+MAIL_FROM = "RAL Finance <reminders@raltech.dev>"
+MAIL_TO = "revenueautomationlab@gmail.com"
+MAIL_CC = "saeedalsaeedbusiness@gmail.com,suhaibrajabo@gmail.com"
+
+# Secrets (set with `wrangler secret put <NAME>` — never commit these):
+#   SUPABASE_SERVICE_ROLE_KEY  — server-side DB read, bypasses RLS
+#   RESEND_API_KEY             — Resend API key
+#   TRIGGER_TOKEN              — guards the manual /preview + /send fetch endpoint

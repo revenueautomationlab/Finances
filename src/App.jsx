@@ -36,6 +36,12 @@ import {
   addDomain as dbAddDomain,
   updateDomain as dbUpdateDomain,
   deleteDomain as dbDeleteDomain,
+  addPaymentSchedule as dbAddPaymentSchedule,
+  updatePaymentSchedule as dbUpdatePaymentSchedule,
+  setPaymentScheduleActive as dbSetPaymentScheduleActive,
+  deletePaymentSchedule as dbDeletePaymentSchedule,
+  addPaymentSchedulePayment as dbAddPaymentSchedulePayment,
+  deletePaymentSchedulePayment as dbDeletePaymentSchedulePayment,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -56,7 +62,8 @@ import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2, Pencil, Eye, ArrowLeft,
   Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
   ArrowDownRight, Target, Loader2, AlertTriangle, Percent, CheckCircle2, X,
-  Globe, Clock, BadgeDollarSign,
+  Globe, Clock, BadgeDollarSign, CalendarClock, CreditCard, ListChecks, Ban,
+  RotateCcw, ChevronDown,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -142,12 +149,81 @@ const formatExpiryDistance = (days) => {
   return `${months}mo`;
 };
 
+// --- Payment tracking helpers (a todo/reminder layer — never touches bank/profit/margin calcs) ---
+const PAYMENT_CATEGORIES = [
+  { id: "domain", name: "Domain" },
+  { id: "cr", name: "CR / License" },
+  { id: "vps", name: "VPS / Server" },
+  { id: "hosting", name: "Hosting" },
+  { id: "apple", name: "Apple Developer" },
+  { id: "android", name: "Google Play" },
+  { id: "amc", name: "AMC (maintenance)" },
+  { id: "other", name: "Other" },
+];
+const paymentCategoryLabel = (id) => PAYMENT_CATEGORIES.find((c) => c.id === id)?.name || "Other";
+const PAYMENT_FREQUENCIES = [
+  { id: "monthly", name: "Monthly" },
+  { id: "yearly", name: "Yearly" },
+  { id: "one_time", name: "One-time" },
+];
+const frequencyLabel = (id) => PAYMENT_FREQUENCIES.find((f) => f.id === id)?.name || id;
+
+const toISODate = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+// Advance a date by one frequency step, clamping monthly to the month's last valid day.
+const addFrequencyStep = (date, frequency) => {
+  if (frequency === "yearly") return new Date(date.getFullYear() + 1, date.getMonth(), date.getDate());
+  const totalMonth = date.getMonth() + 1;
+  const year = date.getFullYear() + Math.floor(totalMonth / 12);
+  const month = ((totalMonth % 12) + 12) % 12;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(date.getDate(), lastDay));
+};
+
+// All due-date occurrences from startDate up to (today + horizonDays), bounded by endDate. one_time => single date.
+const generatePaymentOccurrences = (startDate, frequency, endDate, horizonDays = 550) => {
+  if (!startDate) return [];
+  const occ = [];
+  let cur = new Date(startDate + "T00:00:00");
+  const now = new Date();
+  const horizon = new Date(now.getFullYear(), now.getMonth(), now.getDate() + horizonDays);
+  const end = endDate ? new Date(endDate + "T00:00:00") : null;
+  let guard = 0;
+  while (cur <= horizon && (!end || cur <= end) && guard < 2400) {
+    occ.push(toISODate(cur));
+    if (frequency === "one_time") break;
+    cur = addFrequencyStep(cur, frequency);
+    guard += 1;
+  }
+  return occ;
+};
+
+// Next unpaid occurrence + overdue/paid counts, given a Set of paid period dates for this item.
+// "Next due" anchors on the CURRENT cycle (latest occurrence on/before today) and future cycles —
+// older unpaid cycles stay visible in the history panel but don't nag as overdue.
+const paymentItemStatus = (item, paidPeriods) => {
+  const occurrences = generatePaymentOccurrences(item.startDate, item.frequency, item.endDate);
+  const today = toISODate(new Date());
+  let anchorIdx = -1;
+  for (let i = 0; i < occurrences.length; i += 1) {
+    if (occurrences[i] <= today) anchorIdx = i; else break;
+  }
+  const relevant = anchorIdx >= 0 ? occurrences.slice(anchorIdx) : occurrences;
+  const unpaidRelevant = relevant.filter((o) => !paidPeriods.has(o));
+  const nextDue = unpaidRelevant.length ? unpaidRelevant[0] : null;
+  const overdueCount = unpaidRelevant.filter((o) => o < today).length;
+  const paidCount = occurrences.filter((o) => paidPeriods.has(o)).length;
+  return { occurrences, nextDue, overdueCount, paidCount, settled: nextDue === null };
+};
+
 const initialState = {
   projects: [], bankSpending: [], secretInvestmentSpending: [],
   partnerWithdrawals: [], partnerDividends: [],
   budgets: [], recurringRevenue: [], recurringExpenses: [],
   recurringRevenuePayments: [], recurringExpensePayments: [],
   domains: [],
+  paymentSchedule: [], paymentSchedulePayments: [],
 };
 
 // --- Stat Card Component ---
@@ -231,6 +307,9 @@ export default function App() {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
+  // Payments tab UI state lifted to App scope so it survives data refreshes (mark-paid etc.)
+  const [paymentsTab, setPaymentsTab] = useState("upcoming");
+  const [paymentsExpandedId, setPaymentsExpandedId] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -260,7 +339,7 @@ export default function App() {
     setConfirm({ title, message, action, onConfirm, isDangerous });
   };
 
-  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, partnerDividends, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments, domains } = state;
+  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, partnerDividends, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments, domains, paymentSchedule, paymentSchedulePayments } = state;
 
   // --- Computed Values ---
   // Project profit credits the project for recurring revenue tagged to it (paid installments).
@@ -463,6 +542,37 @@ export default function App() {
 
     return alerts.sort((a, b) => a.days - b.days);
   }, [domains, recurringRevenue, projects]);
+
+  // --- Payment tracking (todo layer — intentionally NOT part of any bank/profit/margin computation) ---
+  const paidPeriodsByScheduleItem = useMemo(() => {
+    const map = {};
+    paymentSchedulePayments.forEach((pp) => {
+      (map[pp.paymentScheduleId] ||= new Set()).add(pp.periodDate);
+    });
+    return map;
+  }, [paymentSchedulePayments]);
+
+  // One entry per upcoming obligation: the next unpaid occurrence of each active schedule item,
+  // plus each domain's next renewal (its expiry date). Sorted by due date.
+  const paymentTimeline = useMemo(() => {
+    const entries = [];
+    paymentSchedule.forEach((item) => {
+      if (!item.active) return;
+      const paid = paidPeriodsByScheduleItem[item.id] || new Set();
+      const { nextDue } = paymentItemStatus(item, paid);
+      if (nextDue) entries.push({ kind: "schedule", id: `s_${item.id}`, item, dueDate: nextDue, days: daysUntil(nextDue) });
+    });
+    domains.forEach((d) => {
+      if (!d.expiryDate) return;
+      entries.push({ kind: "domain", id: `d_${d.id}`, domain: d, dueDate: d.expiryDate, days: daysUntil(d.expiryDate) });
+    });
+    return entries.sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+  }, [paymentSchedule, paidPeriodsByScheduleItem, domains]);
+
+  const paymentsBadgeCount = useMemo(
+    () => paymentTimeline.filter((e) => e.days !== null && e.days <= 14).length,
+    [paymentTimeline],
+  );
 
   // --- CRUD Operations ---
   const addProject = async (name, totalValue) => {
@@ -969,6 +1079,110 @@ export default function App() {
     }
   };
 
+  // --- Payment tracking CRUD (tracking-only) ---
+  const addPaymentItem = async (direction, category, name, amount, frequency, startDate, endDate, projectId, notes) => {
+    setLoading(true);
+    try {
+      await dbAddPaymentSchedule(direction, category, name, amount, frequency, startDate, endDate, projectId, notes);
+      await refreshData();
+      toast.success(`"${name}" added to tracking`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to add: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const editPaymentItem = async (id, direction, category, name, amount, frequency, startDate, endDate, projectId, active, notes) => {
+    setLoading(true);
+    try {
+      await dbUpdatePaymentSchedule(id, direction, category, name, amount, frequency, startDate, endDate, projectId, active, notes);
+      await refreshData();
+      toast.success(`"${name}" updated`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setPaymentItemActive = (item) => {
+    const closing = item.active;
+    showConfirm(
+      closing ? "Close / End Item" : "Reopen Item",
+      closing
+        ? `Stop tracking "${item.name}"? It will no longer show upcoming dues or trigger reminders. You can reopen it later.`
+        : `Reopen "${item.name}" and resume upcoming dues?`,
+      closing ? "Close" : "Reopen",
+      async () => {
+        setLoading(true);
+        try {
+          await dbSetPaymentScheduleActive(item.id, !item.active);
+          await refreshData();
+          toast.success(closing ? `"${item.name}" closed` : `"${item.name}" reopened`);
+          setConfirm(null);
+        } catch (error) {
+          toast.error(`Failed: ${error.message}`);
+        } finally {
+          setLoading(false);
+        }
+      },
+      false,
+    );
+  };
+
+  const deletePaymentItem = (id, name) => {
+    showConfirm("Delete Item", `Permanently delete "${name}" and its payment history? This can't be undone.`, "Delete", async () => {
+      setLoading(true);
+      try {
+        await dbDeletePaymentSchedule(id);
+        await refreshData();
+        toast.success("Item deleted");
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed to delete: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
+  };
+
+  const togglePaymentPaid = async (item, periodDate, existingPayment) => {
+    setLoading(true);
+    try {
+      if (existingPayment) {
+        await dbDeletePaymentSchedulePayment(existingPayment.id);
+        toast.success(`${formatDate(periodDate)} marked unpaid`);
+      } else {
+        await dbAddPaymentSchedulePayment(item.id, periodDate, toISODate(new Date()), null);
+        toast.success(`${formatDate(periodDate)} marked paid`);
+      }
+      await refreshData();
+    } catch (error) {
+      toast.error(`Failed to update: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Renewing a domain = mark its renewal "paid": bump expiry by one year.
+  const renewDomain = async (d) => {
+    const cur = new Date(d.expiryDate + "T00:00:00");
+    const next = toISODate(new Date(cur.getFullYear() + 1, cur.getMonth(), cur.getDate()));
+    setLoading(true);
+    try {
+      await dbUpdateDomain(d.id, d.name, next, d.projectId, d.recurringRevenueId, d.registrar, d.autoRenew, d.notes);
+      await refreshData();
+      toast.success(`${d.name} renewed → ${formatDate(next)}`);
+    } catch (error) {
+      toast.error(`Failed to renew: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const openProject = (id) => { setSelectedProjectId(id); setView("project"); };
 
   // --- Modal Form with Validation ---
@@ -1101,7 +1315,7 @@ export default function App() {
     { key: "bank", label: "Bank Savings", icon: Landmark },
     { key: "budgets", label: "Budgets", icon: Target, count: budgets.length },
     { key: "recurring", label: "Recurring", icon: Repeat },
-    { key: "domains", label: "Domains", icon: Globe, count: domains.length },
+    { key: "payments", label: "Payments", icon: CalendarClock, count: paymentsBadgeCount },
     { key: "reports", label: "Reports", icon: FileBarChart },
     { key: "secretInvestment", label: "Secret Investment", icon: PiggyBank },
   ];
@@ -2447,7 +2661,274 @@ export default function App() {
   }
 
   // --- Domains View ---
-  function DomainsView() {
+  // Color for a due-date badge by urgency.
+  const dueBadgeClass = (days) =>
+    days === null ? "bg-muted text-muted-foreground hover:bg-muted"
+      : days < 0 ? "bg-red-100 text-red-700 hover:bg-red-100"
+      : days <= 7 ? "bg-orange-100 text-orange-700 hover:bg-orange-100"
+      : days <= 30 ? "bg-amber-100 text-amber-700 hover:bg-amber-100"
+      : "bg-emerald-100 text-emerald-700 hover:bg-emerald-100";
+
+  function PaymentsView() {
+    const paymentFields = (defaults = {}) => [
+      { name: "direction", label: "Direction", type: "select", options: [{ id: "outgoing", name: "Outgoing (we pay)" }, { id: "incoming", name: "Incoming (we receive)" }], default: defaults.direction || "outgoing", required: true },
+      { name: "category", label: "Category", type: "select", options: PAYMENT_CATEGORIES, default: defaults.category || "other", required: true },
+      { name: "name", label: "Name / Description", placeholder: "e.g. Apple Developer Program", required: true, default: defaults.name || "" },
+      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true, allowZero: true, default: defaults.amount !== undefined && defaults.amount !== null ? String(defaults.amount) : "" },
+      { name: "frequency", label: "Frequency", type: "select", options: PAYMENT_FREQUENCIES, default: defaults.frequency || "yearly", required: true },
+      { name: "startDate", label: "First due / start date", type: "date", required: true, default: defaults.startDate || "" },
+      { name: "endDate", label: "End date (optional — blank = recurs until you close it)", type: "date", default: defaults.endDate || "" },
+      { name: "projectId", label: "Link to project (optional)", type: "select", options: projects, placeholder: "No project link", default: defaults.projectId || "" },
+      { name: "notes", label: "Notes (optional)", placeholder: "Anything else", default: defaults.notes || "" },
+    ];
+
+    const openAdd = (direction = "outgoing") => setModal({
+      title: "Add Payment",
+      fields: paymentFields({ direction }),
+      onSubmit: (v) => addPaymentItem(v.direction, v.category, v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, v.notes || null),
+    });
+    const openEdit = (item) => setModal({
+      title: "Edit Payment",
+      fields: paymentFields(item),
+      onSubmit: (v) => editPaymentItem(item.id, v.direction, v.category, v.name, parseFloat(v.amount), v.frequency, v.startDate, v.endDate || null, v.projectId || null, item.active, v.notes || null),
+    });
+
+    // Summary stats (informational only)
+    const dueThisWeek = paymentTimeline.filter((e) => e.days !== null && e.days >= 0 && e.days <= 7).length;
+    const overdueCount = paymentTimeline.filter((e) => e.days !== null && e.days < 0).length;
+    const out30 = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "outgoing" && e.days !== null && e.days <= 30).reduce((a, e) => a + e.item.amount, 0);
+    const in30 = paymentTimeline.filter((e) => e.kind === "schedule" && e.item.direction === "incoming" && e.days !== null && e.days <= 30).reduce((a, e) => a + e.item.amount, 0);
+
+    const buckets = [
+      { key: "overdue", label: "Overdue", test: (d) => d !== null && d < 0 },
+      { key: "week", label: "This week", test: (d) => d !== null && d >= 0 && d <= 7 },
+      { key: "month", label: "Next 30 days", test: (d) => d !== null && d > 7 && d <= 30 },
+      { key: "later", label: "Later", test: (d) => d === null || d > 30 },
+    ];
+
+    const DirectionIcon = ({ entry, className }) => {
+      if (entry.kind === "domain") return <Globe className={cn("h-4 w-4 text-indigo-500", className)} />;
+      return entry.item.direction === "incoming"
+        ? <ArrowDownRight className={cn("h-4 w-4 text-emerald-600", className)} />
+        : <ArrowUpRight className={cn("h-4 w-4 text-red-500", className)} />;
+    };
+
+    const TimelineRow = ({ entry }) => {
+      const project = entry.kind === "schedule" ? projects.find((p) => p.id === entry.item.projectId) : projects.find((p) => p.id === entry.domain.projectId);
+      const title = entry.kind === "domain" ? entry.domain.name : entry.item.name;
+      const meta = entry.kind === "domain"
+        ? `Domain renewal${entry.domain.registrar ? ` · ${entry.domain.registrar}` : ""}`
+        : `${paymentCategoryLabel(entry.item.category)} · ${frequencyLabel(entry.item.frequency)}`;
+      return (
+        <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted/60">
+            <DirectionIcon entry={entry} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium truncate">{title}</span>
+              {entry.kind === "schedule" && <Badge variant="outline" className="text-[10px] capitalize">{entry.item.direction}</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground truncate">
+              {meta}{project ? ` · ${project.name}` : ""}
+            </p>
+          </div>
+          <div className="text-right shrink-0">
+            {entry.kind === "schedule"
+              ? <p className={cn("font-semibold tabular-nums text-sm", entry.item.direction === "incoming" ? "text-emerald-700" : "text-red-600")}>{currency(entry.item.amount)}</p>
+              : <p className="text-xs text-muted-foreground">renewal</p>}
+            <p className="text-[11px] text-muted-foreground tabular-nums">{formatDate(entry.dueDate)}</p>
+          </div>
+          <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(entry.days))}>{formatExpiryDistance(entry.days)}</Badge>
+          {entry.kind === "schedule" ? (
+            <Button size="sm" variant="outline" className="h-8 shrink-0" disabled={loading} onClick={() => togglePaymentPaid(entry.item, entry.dueDate, null)}>
+              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Mark paid
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-8 shrink-0" disabled={loading} onClick={() => renewDomain(entry.domain)}>
+              <RotateCcw className="mr-1 h-3.5 w-3.5" /> Renew
+            </Button>
+          )}
+        </div>
+      );
+    };
+
+    // Management table for a given direction (schedule items only; domains live in the Domains tab).
+    const ManageList = ({ direction }) => {
+      const items = paymentSchedule
+        .filter((i) => i.direction === direction)
+        .sort((a, b) => Number(b.active) - Number(a.active) || (a.name || "").localeCompare(b.name || ""));
+      if (items.length === 0) {
+        return <EmptyState icon={direction === "incoming" ? ArrowDownRight : ArrowUpRight} title={`No ${direction} items`} description={`Add an ${direction} payment to start tracking it.`} action={<Button onClick={() => openAdd(direction)}><Plus className="mr-1.5 h-4 w-4" /> Add {direction === "incoming" ? "Incoming" : "Outgoing"}</Button>} />;
+      }
+      return (
+        <div className="space-y-2">
+          {items.map((item) => {
+            const paid = paidPeriodsByScheduleItem[item.id] || new Set();
+            const { nextDue, overdueCount, paidCount, occurrences, settled } = paymentItemStatus(item, paid);
+            const project = projects.find((p) => p.id === item.projectId);
+            const days = nextDue ? daysUntil(nextDue) : null;
+            const expanded = paymentsExpandedId === item.id;
+            return (
+              <div key={item.id} className={cn("rounded-lg border", !item.active && "opacity-60")}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <button className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-muted" onClick={() => setPaymentsExpandedId(expanded ? null : item.id)} title="Show payment history">
+                    <ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium truncate">{item.name}</span>
+                      <Badge variant="outline" className="text-[10px]">{paymentCategoryLabel(item.category)}</Badge>
+                      <Badge variant="outline" className="text-[10px]">{frequencyLabel(item.frequency)}</Badge>
+                      {!item.active && <Badge className="bg-muted text-muted-foreground text-[10px] hover:bg-muted">Closed</Badge>}
+                      {overdueCount > 0 && item.active && <Badge className="bg-red-100 text-red-700 text-[10px] hover:bg-red-100">{overdueCount} overdue</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {currency(item.amount)}
+                      {project ? ` · ${project.name}` : ""}
+                      {item.endDate ? ` · ends ${formatDate(item.endDate)}` : ""}
+                      {` · ✓ ${paidCount} paid`}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0 hidden sm:block">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{settled ? "Settled" : "Next due"}</p>
+                    <p className="text-xs tabular-nums">{nextDue ? formatDate(nextDue) : "—"}</p>
+                  </div>
+                  {item.active && nextDue && <Badge className={cn("tabular-nums shrink-0", dueBadgeClass(days))}>{formatExpiryDistance(days)}</Badge>}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {item.active && nextDue && (
+                      <Button size="sm" variant="outline" className="h-8" disabled={loading} onClick={() => togglePaymentPaid(item, nextDue, null)}>
+                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Paid
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(item)} title="Edit"><Pencil className="h-3.5 w-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setPaymentItemActive(item)} title={item.active ? "Close / end" : "Reopen"}>
+                      {item.active ? <Ban className="h-3.5 w-3.5" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePaymentItem(item.id, item.name)} title="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                </div>
+                {expanded && (
+                  <div className="border-t bg-muted/30 px-4 py-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Payment history</p>
+                    {occurrences.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No occurrences yet.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {[...occurrences].reverse().slice(0, 18).map((occ) => {
+                          const existing = paymentSchedulePayments.find((pp) => pp.paymentScheduleId === item.id && pp.periodDate === occ);
+                          return (
+                            <button
+                              key={occ}
+                              disabled={loading}
+                              onClick={() => togglePaymentPaid(item, occ, existing)}
+                              className={cn(
+                                "rounded-md border px-2 py-1 text-[11px] tabular-nums transition-colors",
+                                existing ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-input bg-card text-muted-foreground hover:bg-muted",
+                              )}
+                              title={existing ? "Marked paid — click to undo" : "Click to mark paid"}
+                            >
+                              {existing ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : null}
+                              {formatDate(occ)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    };
+
+    return (
+      <div className="animate-fade-in-up space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Payments</h1>
+            <p className="text-sm text-muted-foreground">Track incoming &amp; outgoing payments, renewals and domains.</p>
+            <p className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+              <ListChecks className="h-3.5 w-3.5" /> Tracking &amp; reminders only — does not affect bank balances, profit or margins.
+            </p>
+          </div>
+          <Button onClick={() => openAdd("outgoing")}>
+            <Plus className="mr-1.5 h-4 w-4" /> Add Payment
+          </Button>
+        </div>
+
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={CalendarClock} label="Due This Week" value={String(dueThisWeek)} variant={dueThisWeek > 0 ? "highlight" : "default"} />
+          <StatCard icon={AlertTriangle} label="Overdue" value={String(overdueCount)} variant={overdueCount > 0 ? "expense" : "default"} />
+          <StatCard icon={ArrowUpRight} label="Outgoing ≤ 30 days" value={currency(out30)} variant="expense" />
+          <StatCard icon={ArrowDownRight} label="Incoming ≤ 30 days" value={currency(in30)} variant="income" />
+        </div>
+
+        <Tabs value={paymentsTab} onValueChange={setPaymentsTab}>
+          <TabsList>
+            <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
+            <TabsTrigger value="outgoing">Outgoing</TabsTrigger>
+            <TabsTrigger value="incoming">Incoming</TabsTrigger>
+            <TabsTrigger value="domains">Domains</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="upcoming" className="mt-4">
+            {paymentTimeline.length === 0 ? (
+              <Card><CardContent className="p-0">
+                <EmptyState icon={CalendarClock} title="Nothing scheduled" description='Add an incoming or outgoing payment, or a domain, to see it here.' action={<Button onClick={() => openAdd("outgoing")}><Plus className="mr-1.5 h-4 w-4" /> Add Payment</Button>} />
+              </CardContent></Card>
+            ) : (
+              <div className="space-y-5">
+                {buckets.map((bucket) => {
+                  const entries = paymentTimeline.filter((e) => bucket.test(e.days));
+                  if (entries.length === 0) return null;
+                  return (
+                    <div key={bucket.key}>
+                      <div className="mb-2 flex items-center gap-2">
+                        <h3 className="text-sm font-semibold">{bucket.label}</h3>
+                        <Badge variant="outline" className="text-[10px]">{entries.length}</Badge>
+                      </div>
+                      <div className="space-y-2">
+                        {entries.map((entry) => <TimelineRow key={entry.id} entry={entry} />)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="outgoing" className="mt-4">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+                <div><CardTitle className="text-base">Outgoing payments</CardTitle><CardDescription>What we owe — expand a row for its full history</CardDescription></div>
+                <Button size="sm" onClick={() => openAdd("outgoing")}><Plus className="mr-1.5 h-4 w-4" /> Add</Button>
+              </CardHeader>
+              <CardContent><ManageList direction="outgoing" /></CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="incoming" className="mt-4">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+                <div><CardTitle className="text-base">Incoming payments</CardTitle><CardDescription>What clients owe us (AMC, etc.) — expand a row for its full history</CardDescription></div>
+                <Button size="sm" onClick={() => openAdd("incoming")}><Plus className="mr-1.5 h-4 w-4" /> Add</Button>
+              </CardHeader>
+              <CardContent><ManageList direction="incoming" /></CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="domains" className="mt-4">
+            <DomainsView embedded />
+          </TabsContent>
+        </Tabs>
+      </div>
+    );
+  }
+
+  function DomainsView({ embedded = false } = {}) {
     const sorted = [...domains].sort((a, b) => (a.expiryDate || "").localeCompare(b.expiryDate || ""));
     const expiringSoon = sorted.filter((d) => {
       const days = daysUntil(d.expiryDate);
@@ -2466,10 +2947,12 @@ export default function App() {
     ];
 
     return (
-      <div className="animate-fade-in-up space-y-6">
+      <div className={cn(!embedded && "animate-fade-in-up", "space-y-6")}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Domains</h1>
+            {embedded
+              ? <h2 className="text-lg font-semibold tracking-tight">Domains</h2>
+              : <h1 className="text-2xl font-bold tracking-tight">Domains</h1>}
             <p className="text-sm text-muted-foreground">{domains.length} domain{domains.length !== 1 ? "s" : ""} tracked · {upcomingCount} expiring within 90 days</p>
           </div>
           <Button onClick={() => setModal({
@@ -2869,7 +3352,7 @@ export default function App() {
           {view === "bank" && <BankView />}
           {view === "budgets" && <BudgetsView />}
           {view === "recurring" && <RecurringView />}
-          {view === "domains" && <DomainsView />}
+          {view === "payments" && <PaymentsView />}
           {view === "reports" && <ReportsView />}
           {view === "secretInvestment" && <SecretInvestmentView />}
         </div>
