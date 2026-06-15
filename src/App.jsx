@@ -1289,7 +1289,7 @@ export default function App() {
                 </Label>
                 {f.type === "select" ? (
                   <Select value={values[f.name]} onValueChange={(val) => set(f.name, val)}>
-                    <SelectTrigger className={cn(errors[f.name] && touched[f.name] && "border-red-500 ring-red-500/20 ring-2")}>
+                    <SelectTrigger className={cn("w-full", errors[f.name] && touched[f.name] && "border-red-500 ring-red-500/20 ring-2")}>
                       <SelectValue placeholder={f.placeholder || "Select..."} />
                     </SelectTrigger>
                     <SelectContent>
