@@ -663,6 +663,65 @@ export async function deletePaymentSchedulePayment(id) {
   if (error) throw error;
 }
 
+// Admin: app users (roles) + audit log
+export async function fetchAppUsers() {
+  const { data, error } = await supabase.from("app_users").select("*").order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map((u) => ({ email: u.email, role: u.role, status: u.status, invitedBy: u.invited_by, invitedAt: u.invited_at, createdAt: u.created_at }));
+}
+
+export async function addAppUser(email, role, invitedBy) {
+  const { data, error } = await supabase
+    .from("app_users")
+    .insert([{ email: email.toLowerCase().trim(), role, invited_by: invitedBy || null }])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function updateAppUser(email, fields) {
+  const { error } = await supabase.from("app_users").update(fields).eq("email", email);
+  if (error) throw error;
+}
+
+export async function deleteAppUser(email) {
+  const { error } = await supabase.from("app_users").delete().eq("email", email);
+  if (error) throw error;
+}
+
+export async function fetchAuditLog({ limit = 200, table = null, since = null } = {}) {
+  let q = supabase.from("audit_log").select("*").order("changed_at", { ascending: false }).limit(limit);
+  if (table) q = q.eq("table_name", table);
+  if (since) q = q.gte("changed_at", since);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map((a) => ({
+    id: a.id, tableName: a.table_name, rowId: a.row_id, action: a.action,
+    actorEmail: a.actor_email, oldData: a.old_data, newData: a.new_data,
+    changedAt: a.changed_at, revertedAt: a.reverted_at,
+  }));
+}
+
+// Revert a single audited change (admin only; RLS enforces). The revert is itself audited.
+// INSERT → delete the row · DELETE → re-insert the old row · UPDATE → restore old values.
+export async function applyAuditRevert(entry) {
+  const { tableName, action, rowId, oldData } = entry;
+  if (action === "INSERT") {
+    const { error } = await supabase.from(tableName).delete().eq("id", rowId);
+    if (error) throw error;
+  } else if (action === "DELETE") {
+    const { error } = await supabase.from(tableName).insert([oldData]);
+    if (error) throw error;
+  } else if (action === "UPDATE") {
+    const { error } = await supabase.from(tableName).update(oldData).eq("id", rowId);
+    if (error) throw error;
+  } else {
+    throw new Error(`Cannot revert action: ${action}`);
+  }
+  const { error: e2 } = await supabase.from("audit_log").update({ reverted_at: new Date().toISOString() }).eq("id", entry.id);
+  if (e2) throw e2;
+}
+
 // Utility function to generate IDs (same as in App.jsx)
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);

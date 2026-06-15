@@ -42,6 +42,12 @@ import {
   deletePaymentSchedule as dbDeletePaymentSchedule,
   addPaymentSchedulePayment as dbAddPaymentSchedulePayment,
   deletePaymentSchedulePayment as dbDeletePaymentSchedulePayment,
+  fetchAppUsers as dbFetchAppUsers,
+  addAppUser as dbAddAppUser,
+  updateAppUser as dbUpdateAppUser,
+  deleteAppUser as dbDeleteAppUser,
+  fetchAuditLog as dbFetchAuditLog,
+  applyAuditRevert as dbApplyAuditRevert,
 } from "./services/supabaseService";
 
 import { cn } from "@/lib/utils";
@@ -63,7 +69,7 @@ import {
   Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
   ArrowDownRight, Target, Loader2, AlertTriangle, Percent, CheckCircle2, X,
   Globe, Clock, BadgeDollarSign, CalendarClock, CreditCard, ListChecks, Ban,
-  RotateCcw, ChevronDown,
+  RotateCcw, ChevronDown, ShieldCheck, History, UserPlus, Lock,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -305,7 +311,7 @@ function EmptyState({ icon: Icon, title, description, action }) {
 }
 
 export default function App() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, role, isAdmin, canWrite } = useAuth();
   const [state, setState] = useState(initialState);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("dashboard");
@@ -345,6 +351,12 @@ export default function App() {
       console.error("Failed to refresh data:", error);
     }
   }, []);
+
+  // Readers (role !== full/admin) can't mutate — RLS enforces this server-side; this is the clean UX guard.
+  const guardWrite = () => {
+    if (!canWrite) { toast.error("Read-only access — ask an admin for edit rights."); return false; }
+    return true;
+  };
 
   const showConfirm = (title, message, action, onConfirm, isDangerous = false) => {
     setConfirm({ title, message, action, onConfirm, isDangerous });
@@ -1055,6 +1067,7 @@ export default function App() {
   };
 
   const toggleRecurringRevPayment = async (recurringItem, periodDate, existingPayment) => {
+    if (!guardWrite()) return;
     setLoading(true);
     try {
       if (existingPayment) {
@@ -1073,6 +1086,7 @@ export default function App() {
   };
 
   const toggleRecurringExpPayment = async (recurringItem, periodDate, existingPayment) => {
+    if (!guardWrite()) return;
     setLoading(true);
     try {
       if (existingPayment) {
@@ -1161,6 +1175,7 @@ export default function App() {
   };
 
   const togglePaymentPaid = async (item, periodDate, existingPayment) => {
+    if (!guardWrite()) return;
     setLoading(true);
     try {
       if (existingPayment) {
@@ -1180,6 +1195,7 @@ export default function App() {
 
   // Renewing a domain = mark its renewal "paid": bump expiry by one year.
   const renewDomain = async (d) => {
+    if (!guardWrite()) return;
     const cur = new Date(d.expiryDate + "T00:00:00");
     const next = toISODate(new Date(cur.getFullYear() + 1, cur.getMonth(), cur.getDate()));
     setLoading(true);
@@ -1231,6 +1247,7 @@ export default function App() {
 
     const handleSubmit = (e) => {
       e.preventDefault();
+      if (!guardWrite()) return;
       const errs = validate();
       if (Object.keys(errs).length > 0) {
         setErrors(errs);
@@ -1329,6 +1346,7 @@ export default function App() {
     { key: "payments", label: "Payments", icon: CalendarClock, count: paymentsBadgeCount },
     { key: "reports", label: "Reports", icon: FileBarChart },
     { key: "secretInvestment", label: "Secret Investment", icon: PiggyBank },
+    ...(isAdmin ? [{ key: "admin", label: "Admin", icon: ShieldCheck }] : []),
   ];
 
   function SidebarContent() {
@@ -1450,12 +1468,230 @@ export default function App() {
   }
 
   // --- Dashboard ---
+  function AdminView() {
+    const [adminTab, setAdminTab] = useState("users");
+    const [users, setUsers] = useState([]);
+    const [audit, setAudit] = useState([]);
+    const [auditTable, setAuditTable] = useState("");
+    const [expandedAudit, setExpandedAudit] = useState(null);
+
+    const loadUsers = async () => { try { setUsers(await dbFetchAppUsers()); } catch (e) { toast.error(`Load users failed: ${e.message}`); } };
+    const loadAudit = async (table = auditTable) => { try { setAudit(await dbFetchAuditLog({ limit: 200, table: table || null })); } catch (e) { toast.error(`Load audit failed: ${e.message}`); } };
+    useEffect(() => { loadUsers(); loadAudit(""); /* eslint-disable-next-line */ }, []);
+
+    const onboard = () => setModal({
+      title: "Onboard User",
+      fields: [
+        { name: "email", label: "Google email (must be @gmail.com)", placeholder: "person@gmail.com", required: true },
+        { name: "role", label: "Role", type: "select", options: [{ id: "reader", name: "Reader — view only" }, { id: "full", name: "Full — edit & delete" }], default: "reader", required: true },
+      ],
+      onSubmit: async (v) => {
+        const email = (v.email || "").toLowerCase().trim();
+        if (!/^[^@\s]+@gmail\.com$/.test(email)) { toast.error("Must be a valid @gmail.com address"); return; }
+        try {
+          await dbAddAppUser(email, v.role, user?.email);
+          await loadUsers();
+          toast.success(`${email} onboarded as ${v.role}. Invite email sends from the daily mailer.`);
+          setModal(null);
+        } catch (e) { toast.error(`Failed: ${e.message}`); }
+      },
+    });
+
+    const setUserRole = async (email, role) => { try { await dbUpdateAppUser(email, { role }); await loadUsers(); toast.success(`${email} → ${role}`); } catch (e) { toast.error(e.message); } };
+    const setUserStatus = async (email, status) => { try { await dbUpdateAppUser(email, { status }); await loadUsers(); toast.success(`${email} ${status}`); } catch (e) { toast.error(e.message); } };
+    const removeUser = (email) => showConfirm("Remove User", `Remove ${email}? They'll lose access immediately.`, "Remove", async () => {
+      try { await dbDeleteAppUser(email); await loadUsers(); toast.success("User removed"); setConfirm(null); } catch (e) { toast.error(e.message); }
+    }, true);
+
+    const revertEntry = (entry) => showConfirm(
+      "Revert this change",
+      `Undo the ${entry.action} on ${entry.tableName} (${formatDate(entry.changedAt?.slice(0, 10))})? This restores the previous state and is itself logged.`,
+      "Revert",
+      async () => { try { await dbApplyAuditRevert(entry); await loadAudit(); await refreshData(); toast.success("Change reverted"); setConfirm(null); } catch (e) { toast.error(`Revert failed: ${e.message}`); } },
+    );
+
+    const actionBadge = (a) => a === "INSERT" ? "bg-emerald-100 text-emerald-700" : a === "DELETE" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700";
+    const changedFields = (e) => {
+      if (e.action !== "UPDATE" || !e.oldData || !e.newData) return [];
+      return Object.keys(e.newData).filter((k) => JSON.stringify(e.oldData[k]) !== JSON.stringify(e.newData[k]));
+    };
+    const auditTables = ["", "projects", "payments", "expenses", "bank_spending", "secret_investment_spending", "partner_withdrawals", "partner_dividends", "budgets", "budget_spending", "recurring_revenue", "recurring_expenses", "recurring_revenue_payments", "recurring_expense_payments", "domains", "payment_schedule", "payment_schedule_payments", "app_users"];
+
+    return (
+      <div className="animate-fade-in-up space-y-6">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight"><ShieldCheck className="h-6 w-6 text-primary" /> Admin</h1>
+          <p className="text-sm text-muted-foreground">Manage who can access the system, review every change, and revert mistakes. Visible only to {user?.email}.</p>
+        </div>
+
+        <Tabs value={adminTab} onValueChange={setAdminTab}>
+          <TabsList>
+            <TabsTrigger value="users">Users &amp; Roles</TabsTrigger>
+            <TabsTrigger value="audit">Audit Log</TabsTrigger>
+            <TabsTrigger value="backups">Backups &amp; Restore</TabsTrigger>
+          </TabsList>
+
+          {/* USERS */}
+          <TabsContent value="users" className="mt-4">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+                <div><CardTitle className="text-base">Team access</CardTitle><CardDescription>Onboard Google accounts and set their role</CardDescription></div>
+                <Button size="sm" onClick={onboard}><UserPlus className="mr-1.5 h-4 w-4" /> Onboard user</Button>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-lg border overflow-hidden">
+                  <Table>
+                    <TableHeader><TableRow className="bg-muted/50">
+                      <TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead><TableHead>Added</TableHead><TableHead className="w-44" />
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-medium flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 text-primary" />{user?.email}</TableCell>
+                        <TableCell><Badge className="bg-primary/10 text-primary hover:bg-primary/10">admin</Badge></TableCell>
+                        <TableCell><Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">active</Badge></TableCell>
+                        <TableCell className="text-muted-foreground">—</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">owner</TableCell>
+                      </TableRow>
+                      {users.map((u) => (
+                        <TableRow key={u.email}>
+                          <TableCell className="font-medium">{u.email}</TableCell>
+                          <TableCell>
+                            <select value={u.role} onChange={(e) => setUserRole(u.email, e.target.value)} className="rounded-md border bg-card px-2 py-1 text-xs">
+                              <option value="reader">reader</option>
+                              <option value="full">full</option>
+                            </select>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={cn("hover:opacity-100", u.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground")}>{u.status}</Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs tabular-nums">{u.createdAt ? formatDate(u.createdAt.slice(0, 10)) : "—"}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="sm" className="h-8" onClick={() => setUserStatus(u.email, u.status === "active" ? "disabled" : "active")}>{u.status === "active" ? "Disable" : "Enable"}</Button>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => removeUser(u.email)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {users.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">No users onboarded yet. Click “Onboard user”.</TableCell></TableRow>}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground"><b>Reader</b> can view everything. <b>Full</b> can add, edit and delete. Roles are enforced by the database (RLS), not just the UI.</p>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* AUDIT */}
+          <TabsContent value="audit" className="mt-4">
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
+                <div><CardTitle className="text-base">Audit log</CardTitle><CardDescription>Every change, who made it, and one-click revert</CardDescription></div>
+                <div className="flex items-center gap-2">
+                  <select value={auditTable} onChange={(e) => { setAuditTable(e.target.value); loadAudit(e.target.value); }} className="rounded-md border bg-card px-2 py-1.5 text-xs">
+                    {auditTables.map((t) => <option key={t} value={t}>{t === "" ? "All tables" : t}</option>)}
+                  </select>
+                  <Button size="sm" variant="outline" onClick={() => loadAudit()}><RotateCcw className="mr-1 h-3.5 w-3.5" /> Refresh</Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-lg border overflow-hidden">
+                  <Table>
+                    <TableHeader><TableRow className="bg-muted/50">
+                      <TableHead>When</TableHead><TableHead>Who</TableHead><TableHead>Action</TableHead><TableHead>Table</TableHead><TableHead>Change</TableHead><TableHead className="w-28" />
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {audit.map((e) => {
+                        const fields = changedFields(e);
+                        const open = expandedAudit === e.id;
+                        return (
+                          <React.Fragment key={e.id}>
+                            <TableRow className={cn(e.revertedAt && "opacity-50")}>
+                              <TableCell className="text-xs tabular-nums whitespace-nowrap">{e.changedAt ? new Date(e.changedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</TableCell>
+                              <TableCell className="text-xs truncate max-w-[140px]">{e.actorEmail || "—"}</TableCell>
+                              <TableCell><Badge className={cn("text-[10px]", actionBadge(e.action))}>{e.action}</Badge></TableCell>
+                              <TableCell className="text-xs">{e.tableName}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {e.action === "UPDATE" ? `${fields.length} field${fields.length !== 1 ? "s" : ""}` : e.action === "DELETE" ? "row deleted" : "row created"}
+                                {" · "}<button className="underline" onClick={() => setExpandedAudit(open ? null : e.id)}>{open ? "hide" : "details"}</button>
+                              </TableCell>
+                              <TableCell>
+                                {e.revertedAt
+                                  ? <span className="text-[11px] text-muted-foreground">reverted</span>
+                                  : <Button size="sm" variant="outline" className="h-7" onClick={() => revertEntry(e)}><RotateCcw className="mr-1 h-3 w-3" /> Revert</Button>}
+                              </TableCell>
+                            </TableRow>
+                            {open && (
+                              <TableRow><TableCell colSpan={6} className="bg-muted/30">
+                                <pre className="max-h-64 overflow-auto text-[11px] leading-relaxed">{JSON.stringify({ old: e.oldData, new: e.newData }, null, 2)}</pre>
+                              </TableCell></TableRow>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                      {audit.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-8">No changes logged yet.</TableCell></TableRow>}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground">Showing the latest {audit.length} entries. Revert restores a single change and is itself logged.</p>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* BACKUPS */}
+          <TabsContent value="backups" className="mt-4">
+            <Card>
+              <CardHeader className="pb-4"><CardTitle className="text-base">Backups &amp; restore</CardTitle><CardDescription>Daily snapshots + OTP-gated restore</CardDescription></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
+                  <History className="mt-0.5 h-5 w-5 text-primary shrink-0" />
+                  <div className="text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">How recovery works here</p>
+                    <ul className="mt-1.5 list-disc pl-4 space-y-1">
+                      <li>Every change is captured in the <b>Audit Log</b> — restore deleted rows or undo any edit from there (keeps all later data).</li>
+                      <li>A secure worker takes a <b>daily snapshot</b> of all data and keeps the last 30.</li>
+                      <li>Restoring a whole snapshot requires an <b>OTP sent to {user?.email}</b>.</li>
+                    </ul>
+                    <p className="mt-2 text-xs">Snapshot list &amp; one-click OTP restore appear here once the secure worker is deployed (next rollout step).</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </div>
+    );
+  }
+
   function DashboardView() {
+    // Current-year cash movements (by transaction date).
+    const yr = String(new Date().getFullYear());
+    const inYr = (d) => typeof d === "string" && d.slice(0, 4) === yr;
+    const sumF = (arr, ok, get) => arr.reduce((a, x) => a + (ok(x) ? get(x) : 0), 0);
+    const yearIncome =
+      projects.reduce((a, p) => a + sumF(p.payments || [], (x) => inYr(x.date), (x) => x.amount), 0)
+      + sumF(recurringRevenuePayments, (rp) => inYr(rp.periodDate), (rp) => rp.amount);
+    const yearOutgoing =
+      projects.reduce((a, p) => a + sumF(p.expenses || [], (x) => inYr(x.date), (x) => x.amount), 0)
+      + sumF(recurringExpensePayments, (ep) => inYr(ep.periodDate), (ep) => ep.amount)
+      + sumF(bankSpending, (x) => inYr(x.date), (x) => x.amount)
+      + sumF(secretInvestmentSpending, (x) => inYr(x.date), (x) => x.amount)
+      + budgets.reduce((a, b) => a + sumF(b.spending || [], (s) => inYr(s.date), (s) => s.amount), 0)
+      + sumF(partnerWithdrawals, (x) => inYr(x.date), (x) => x.amount)
+      + sumF(partnerDividends, (x) => inYr(x.date), (x) => x.amount);
+    const yearNet = yearIncome - yearOutgoing;
     return (
       <div className="animate-fade-in-up space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">Overview of all project finances</p>
+        </div>
+
+        {/* Always-on current-year income vs outgoing */}
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <StatCard icon={ArrowDownRight} label={`${yr} Income`} value={currency(yearIncome)} variant="income" sub="Money received this year" />
+          <StatCard icon={ArrowUpRight} label={`${yr} Outgoing`} value={currency(yearOutgoing)} variant="expense" sub="Money spent this year (incl. payouts)" />
+          <StatCard icon={Wallet} label={`${yr} Net`} value={currency(yearNet)} variant={yearNet >= 0 ? "bank" : "expense"} sub="Income − outgoing" />
         </div>
 
         {expiryAlerts.length > 0 && <ExpiryAlertsBanner alerts={expiryAlerts} />}
@@ -3389,6 +3625,13 @@ export default function App() {
         </div>
 
         <div className="mx-auto max-w-[1400px] p-4 sm:p-6 lg:p-8">
+          {!canWrite && (
+            <div className="mb-5 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+              <Lock className="h-4 w-4 shrink-0" /> <span><b>Read-only access.</b> You can view everything but can't add, edit or delete. Ask the admin for full access.</span>
+            </div>
+          )}
+          {view === "admin" && !isAdmin && <div className="text-sm text-muted-foreground">Not authorized.</div>}
+          {view === "admin" && isAdmin && <AdminView />}
           {view === "dashboard" && <DashboardView />}
           {view === "projects" && <ProjectsView />}
           {view === "project" && <ProjectDetailView />}
@@ -3416,7 +3659,7 @@ export default function App() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirm(null)} disabled={loading}>Cancel</Button>
-            <Button variant={confirm?.isDangerous ? "destructive" : "default"} onClick={async () => { await confirm?.onConfirm(); }} disabled={loading}>
+            <Button variant={confirm?.isDangerous ? "destructive" : "default"} onClick={async () => { if (!guardWrite()) return; await confirm?.onConfirm(); }} disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {loading ? "Processing..." : confirm?.action}
             </Button>
