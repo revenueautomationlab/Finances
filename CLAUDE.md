@@ -138,9 +138,10 @@ Per-project profit uses only cash actually received/paid.
 2. **Bank Dividends** — payouts recorded in `partner_dividends`, drawn from the bank (capped by `bankBalance`). The salary mechanism.
 Both reduce the bank when recorded.
 
-### Secret Investment (yearly, 25%)
-- **netProfitForYear(Y)** = incomeReceived(dated in Y) − expensesPaid(dated in Y). Excludes owner distributions and secret transfers (those are profit distribution, not cost).
-- **secretDueForYear(Y)** = `max(0, netProfitForYear(Y)) × 0.25`.
+### Secret Investment (yearly, 25% — after payouts)
+- **netProfitForYear(Y)** = incomeReceived(in Y) − expensesPaid(in Y) — net profit BEFORE paying ourselves (drives the Dashboard Net Profit + margin).
+- **finalNetForYear(Y)** = netProfitForYear(Y) − distributions(in Y) (withdrawals + dividends) — the final amount after we pay ourselves.
+- **secretDueForYear(Y)** = `max(0, finalNetForYear(Y)) × 0.25`. The Secret Investment view shows the full Revenue → −Expenses → Net (before) → −Payouts → Final (after) → ×25% breakdown.
 - At year-end, "Mark as moved" writes a `secret_investment_transfers` row (`year`, `amount` default = due, `moved_date`), which **reduces the bank**. Undo = delete the row. The Secret Investment view is a **year browser** (prev/current/future).
 
 ### Bank & Cash Position (the only bank figure)
@@ -198,7 +199,7 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 - `budgetStats`, `expiryAlerts` — unchanged
 
 ## App Views
-1. **Dashboard** — Expiry alerts banner (when applicable), comprehensive revenue/outflow/margin/bank stat cards, project profit distribution, partner balances with both share-withdraw and bank-dividend buttons, recent activity table (mixed withdrawals + dividends), budget & recurring quick overview, projects table
+1. **Dashboard** — Clean period-selectable KPI header: a year stepper (◀ 2026 ▶) + **All time** toggle (`dashPeriod` state) drives 4 cards for that period — **Total Revenue** (contract + recurring), **Outgoing** (incl. recurring), **Net Profit** (before we pay ourselves), **Margin**. Then expiry alerts, Founder Shares (10%/10%), Partner Balances (share-withdraw + bank-dividend), quick overview, projects table. (Removed the old Total-Expenses/Operating-Outflow/Total-in-Bank/Secret/Recurring/Project-Profit/Year-Potential cards — Total in Bank + Year Potential now live in the sidebar footer.)
 2. **Projects** — Summary stats (paid/unpaid/expenses/project profit/all-in margin/in-bank), project cards with payment progress (free projects show "Free" badge)
 3. **Project Detail** — Contract value (or "Free + Recurring" badge), payments and expenses tables, profit split (contract-only), recurring revenue periods (mark paid/unpaid), recurring expenses periods
 4. **Bank** — Total in bank (`bankBalance` = all our money), money received / spent / paid-out cards, "Where the money went" composition (received − expenses − payouts − secret moved = balance), partner dividends payout & history, spending history, per-project profit contributions

@@ -339,6 +339,8 @@ export default function App() {
   const [paymentsTab, setPaymentsTab] = useState("upcoming");
   const [paymentsExpandedId, setPaymentsExpandedId] = useState(null);
   const [recurringExpandedId, setRecurringExpandedId] = useState(null);
+  // Dashboard period: a year number, or "all" for all-time.
+  const [dashPeriod, setDashPeriod] = useState(() => new Date().getFullYear());
 
   useEffect(() => {
     const loadData = async () => {
@@ -451,8 +453,11 @@ export default function App() {
     const t = secretInvestmentTransfers.find((x) => Number(x.year) === Number(y));
     return t ? t.amount : 0;
   };
+  // Net profit BEFORE we pay ourselves (revenue − operating expenses). Drives the Dashboard + margin.
   const netProfitForYear = (y) => incomeReceived((d) => inYear(d, y)) - expensesPaid((d) => inYear(d, y));
-  const secretDueForYear = (y) => Math.max(0, netProfitForYear(y)) * 0.25;
+  // Final net AFTER partner payouts (withdrawals + dividends) — the basis for the 25% secret investment.
+  const finalNetForYear = (y) => netProfitForYear(y) - distributions((d) => inYear(d, y));
+  const secretDueForYear = (y) => Math.max(0, finalNetForYear(y)) * 0.25;
 
   // THE BANK — all our real money, cumulative: received − paid − owner payouts − secret moved out.
   const bankBalance = incomeReceived() - expensesPaid() - distributions() - secretMovedTotal;
@@ -1442,6 +1447,10 @@ export default function App() {
             <p className={cn("text-sm font-bold tabular-nums", bankBalance >= 0 ? "text-emerald-400" : "text-red-400")}>
               {currency(bankBalance)}
             </p>
+            <div className="flex items-center justify-between border-t border-sidebar-border/60 pt-2">
+              <span className="text-[11px] font-medium text-sidebar-foreground/50">Year Potential</span>
+              <span className="text-xs font-semibold tabular-nums text-sidebar-foreground/70">{currency(globalPotential)}</span>
+            </div>
           </div>
           <Separator className="bg-sidebar-border" />
           <div className="space-y-1">
@@ -1842,51 +1851,47 @@ export default function App() {
   }
 
   function DashboardView() {
-    // Current-year cash movements (by transaction date).
-    const yr = String(new Date().getFullYear());
-    const inYr = (d) => typeof d === "string" && d.slice(0, 4) === yr;
-    const sumF = (arr, ok, get) => arr.reduce((a, x) => a + (ok(x) ? get(x) : 0), 0);
-    const yearIncome =
-      projects.reduce((a, p) => a + sumF(p.payments || [], (x) => inYr(x.date), (x) => x.amount), 0)
-      + sumF(recurringRevenuePayments, (rp) => inYr(rp.periodDate), (rp) => rp.amount);
-    const yearOutgoing =
-      projects.reduce((a, p) => a + sumF(p.expenses || [], (x) => inYr(x.date), (x) => x.amount), 0)
-      + sumF(recurringExpensePayments, (ep) => inYr(ep.periodDate), (ep) => ep.amount)
-      + sumF(bankSpending, (x) => inYr(x.date), (x) => x.amount)
-      + budgets.reduce((a, b) => a + sumF(b.spending || [], (s) => inYr(s.date), (s) => s.amount), 0)
-      + sumF(partnerWithdrawals, (x) => inYr(x.date), (x) => x.amount)
-      + sumF(partnerDividends, (x) => inYr(x.date), (x) => x.amount)
-      + sumF(secretInvestmentTransfers, (x) => inYr(x.movedDate), (x) => x.amount);
-    const yearNet = yearIncome - yearOutgoing;
+    const curYear = new Date().getFullYear();
+    const isAll = dashPeriod === "all";
+    const periodPred = isAll ? (() => true) : ((d) => inYear(d, dashPeriod));
+    const periodLabel = isAll ? "All time" : String(dashPeriod);
+
+    // Cash actually received / paid in the selected period (contract + recurring folded in).
+    const revenue = incomeReceived(periodPred);
+    const contractRev = allContractPayments.reduce((a, x) => a + (periodPred(x.date) ? x.amount : 0), 0);
+    const recurringRev = recurringRevenuePayments.reduce((a, x) => a + (periodPred(x.periodDate) ? x.amount : 0), 0);
+    const expenses = expensesPaid(periodPred);
+    const recurringExp = recurringExpensePayments.reduce((a, x) => a + (periodPred(x.periodDate) ? x.amount : 0), 0);
+    const netBefore = revenue - expenses; // net profit BEFORE we pay ourselves
+    const margin = revenue > 0 ? (netBefore / revenue) * 100 : 0;
+
     return (
       <div className="animate-fade-in-up space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Overview of all project finances</p>
-        </div>
-
-        {/* Always-on current-year income vs outgoing */}
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-          <StatCard icon={ArrowDownRight} label={`${yr} Income`} value={currency(yearIncome)} variant="income" sub="Money received this year" />
-          <StatCard icon={ArrowUpRight} label={`${yr} Outgoing`} value={currency(yearOutgoing)} variant="expense" sub="Money spent this year (incl. payouts)" />
-          <StatCard icon={Wallet} label={`${yr} Net`} value={currency(yearNet)} variant={yearNet >= 0 ? "bank" : "expense"} sub="Income − outgoing" />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+            <p className="text-sm text-muted-foreground">{isAll ? "All-time overview" : `${periodLabel} overview`}</p>
+          </div>
+          {/* Period selector — step through years or show all-time */}
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="icon" className="h-8 w-8" disabled={isAll} onClick={() => setDashPeriod((y) => (y === "all" ? curYear : y - 1))} title="Previous year">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <span className="min-w-[84px] text-center text-sm font-bold tabular-nums">{periodLabel}</span>
+            <Button variant="outline" size="icon" className="h-8 w-8" disabled={isAll || dashPeriod >= curYear + 1} onClick={() => setDashPeriod((y) => (y === "all" ? curYear : y + 1))} title="Next year">
+              <ArrowLeft className="h-4 w-4 rotate-180" />
+            </Button>
+            <Button variant={isAll ? "default" : "outline"} size="sm" className="ml-1 h-8" onClick={() => setDashPeriod(isAll ? curYear : "all")}>All time</Button>
+          </div>
         </div>
 
         {expiryAlerts.length > 0 && <ExpiryAlertsBanner alerts={expiryAlerts} />}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`Contract: ${currency(globalContractRevenue)} · Recurring: ${currency(recurringRevenueIncome.total)}`} variant="income" />
-          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" sub="Project, recurring, bank & budget spending" onClick={() => setView("projects")} />
-          <StatCard icon={TrendingUp} label={`${yr} Net Profit`} value={currency(netProfitForYear(yr))} variant={netProfitForYear(yr) >= 0 ? "income" : "expense"} sub={`This year's revenue − all expenses (basis for 25%)`} onClick={() => setView("secretInvestment")} />
-          <StatCard icon={Percent} label="Operating Margin" value={`${globalMargin.toFixed(1)}%`} variant={globalMargin >= 25 ? "income" : globalMargin >= 0 ? "highlight" : "expense"} sub={`Operating net: ${currency(operatingNet)}`} />
-          <StatCard icon={Landmark} label="Total in Bank" value={currency(bankBalance)} variant="bank" sub="All our money — received − all spending & payouts" onClick={() => setView("bank")} />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={PiggyBank} label={`Secret Investment (${yr})`} value={currency(secretDueForYear(yr))} variant="secret" sub={`25% of ${yr} net profit${secretMovedForYear(yr) > 0 ? " · moved" : " · pending"}`} onClick={() => setView("secretInvestment")} />
-          <StatCard icon={Repeat} label="Recurring Revenue" value={currency(recurringRevenueIncome.total)} variant="income" sub={`Tagged: ${currency(recurringRevenueIncome.projectLinkedPaid)} · General: ${currency(recurringRevenueIncome.generalPaid)}`} onClick={() => setView("recurring")} />
-          <StatCard icon={TrendingUp} label="Project Profit" value={currency(globalProjectProfit)} variant={globalProjectProfit >= 0 ? "income" : "expense"} sub="Contract + recurring received − costs" onClick={() => setView("projects")} />
-          <StatCard icon={CircleDollarSign} label="Year Potential" value={currency(globalPotential)} variant="default" sub="Contract + recurring to Dec" />
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard icon={DollarSign} label="Total Revenue" value={currency(revenue)} variant="income" sub={`Contract ${currency(contractRev)} · Recurring ${currency(recurringRev)}`} />
+          <StatCard icon={ArrowUpRight} label="Outgoing" value={currency(expenses)} variant="expense" sub={`Incl. recurring ${currency(recurringExp)}`} />
+          <StatCard icon={TrendingUp} label="Net Profit" value={currency(netBefore)} variant={netBefore >= 0 ? "income" : "expense"} sub="Before we pay ourselves" />
+          <StatCard icon={Percent} label="Margin" value={`${margin.toFixed(1)}%`} variant={margin >= 25 ? "income" : margin >= 0 ? "highlight" : "expense"} sub={`Net ${currency(netBefore)} of ${currency(revenue)}`} />
         </div>
 
         {globalProjectProfit > 0 && (
@@ -3664,8 +3669,10 @@ export default function App() {
     const [selectedYear, setSelectedYear] = useState(thisYear);
     const income = incomeReceived((d) => inYear(d, selectedYear));
     const expenses = expensesPaid((d) => inYear(d, selectedYear));
-    const netProfit = income - expenses;
-    const due = Math.max(0, netProfit) * 0.25;
+    const netBefore = income - expenses; // before we pay ourselves
+    const payouts = distributions((d) => inYear(d, selectedYear)); // withdrawals + dividends
+    const finalNet = netBefore - payouts; // the final amount after we've paid ourselves
+    const due = Math.max(0, finalNet) * 0.25;
     const transfer = secretInvestmentTransfers.find((t) => Number(t.year) === selectedYear) || null;
     const moved = transfer ? transfer.amount : 0;
     const minYear = secretInvestmentTransfers.reduce((m, t) => Math.min(m, Number(t.year)), thisYear) - 1;
@@ -3676,7 +3683,7 @@ export default function App() {
 
     return (
       <div className="animate-fade-in-up space-y-6">
-        <div><h1 className="text-2xl font-bold tracking-tight">Secret Investment</h1><p className="text-sm text-muted-foreground">25% of each year's net profit, set aside at year-end and moved out of the bank.</p></div>
+        <div><h1 className="text-2xl font-bold tracking-tight">Secret Investment</h1><p className="text-sm text-muted-foreground">25% of each year's final net profit (after we pay ourselves), set aside at year-end and moved out of the bank.</p></div>
 
         {/* Year selector */}
         <div className="flex items-center justify-center gap-4">
@@ -3690,10 +3697,33 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <StatCard icon={TrendingUp} label={`${selectedYear} Net Profit`} value={currency(netProfit)} variant={netProfit >= 0 ? "income" : "expense"} sub={`Received ${currency(income)} − spent ${currency(expenses)}`} />
-          <StatCard icon={PiggyBank} label="Secret Investment (25%)" value={currency(due)} variant="secret" sub="Of this year's net profit" />
+          <StatCard icon={TrendingUp} label={`${selectedYear} Final Net Profit`} value={currency(finalNet)} variant={finalNet >= 0 ? "income" : "expense"} sub={`After ${currency(payouts)} paid to partners`} />
+          <StatCard icon={PiggyBank} label="Secret Investment (25%)" value={currency(due)} variant="secret" sub="Of the final net profit" />
           <StatCard icon={moved > 0 ? Landmark : Wallet} label="Status" value={moved > 0 ? "Moved" : "Pending"} variant={moved > 0 ? "highlight" : "default"} sub={moved > 0 ? `${currency(moved)} on ${formatDate(transfer.movedDate)}` : "Not yet moved out"} />
         </div>
+
+        {/* How the 25% is calculated */}
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">How {selectedYear} is calculated</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {[
+              { label: "Revenue received", value: income, tone: "text-emerald-600" },
+              { label: "− Expenses paid (incl. bank & budgets)", value: -expenses, tone: "text-red-600" },
+              { label: "= Net profit (before we pay ourselves)", value: netBefore, tone: "", strong: true },
+              { label: "− Partner withdrawals & dividends", value: -payouts, tone: "text-red-600" },
+              { label: "= Final net profit (after we pay ourselves)", value: finalNet, tone: "", strong: true },
+            ].map((r) => (
+              <div key={r.label} className={cn("flex items-center justify-between", r.strong && "border-t pt-2")}>
+                <span className={cn("text-sm", r.strong ? "font-semibold" : "text-muted-foreground")}>{r.label}</span>
+                <span className={cn("text-sm tabular-nums", r.strong ? "font-bold" : r.tone)}>{currency(r.value)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between border-t pt-2">
+              <span className="text-sm font-semibold text-pink-700">× 25% = Secret investment</span>
+              <span className="text-sm font-bold tabular-nums text-pink-700">{currency(due)}</span>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-4">
