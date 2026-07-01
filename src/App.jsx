@@ -470,9 +470,8 @@ export default function App() {
   const globalContractRevenue = projectStats.reduce((a, p) => a + p.contractPayments, 0);
   // Total revenue = all cash received (contract + all recurring paid).
   const globalRevenue = incomeReceived();
-  // Operating expenses shown as "project + recurring" (excludes bank/budget spending, which are their own lines).
-  const globalExpenses = allProjectExpenses.reduce((a, x) => a + x.amount, 0)
-    + recurringExpensePayments.reduce((a, x) => a + x.amount, 0);
+  // Total expenses = ALL operating spend (project + recurring + bank spending + budget spending).
+  const globalExpenses = expensesPaid();
   // Year-end potential: project contracts + active recurring projected to Dec 31 (informational only).
   const globalPotential =
     projectStats.reduce((a, p) => a + p.totalPotential, 0)
@@ -1877,8 +1876,8 @@ export default function App() {
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <StatCard icon={DollarSign} label="Total Revenue" value={currency(globalRevenue)} sub={`Contract: ${currency(globalContractRevenue)} · Recurring: ${currency(recurringRevenueIncome.total)}`} variant="income" />
-          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" sub="Project + recurring expenses" onClick={() => setView("projects")} />
-          <StatCard icon={ArrowDownRight} label="Operating Outflow" value={currency(operatingOutflow)} variant="expense" sub="All costs (excl. partner payouts)" />
+          <StatCard icon={TrendingDown} label="Total Expenses" value={currency(globalExpenses)} variant="expense" sub="Project, recurring, bank & budget spending" onClick={() => setView("projects")} />
+          <StatCard icon={TrendingUp} label={`${yr} Net Profit`} value={currency(netProfitForYear(yr))} variant={netProfitForYear(yr) >= 0 ? "income" : "expense"} sub={`This year's revenue − all expenses (basis for 25%)`} onClick={() => setView("secretInvestment")} />
           <StatCard icon={Percent} label="Operating Margin" value={`${globalMargin.toFixed(1)}%`} variant={globalMargin >= 25 ? "income" : globalMargin >= 0 ? "highlight" : "expense"} sub={`Operating net: ${currency(operatingNet)}`} />
           <StatCard icon={Landmark} label="Total in Bank" value={currency(bankBalance)} variant="bank" sub="All our money — received − all spending & payouts" onClick={() => setView("bank")} />
         </div>
