@@ -1,7 +1,7 @@
 # RAL Finance - Project Guide
 
 ## Overview
-Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects (which can be free or paid), and splits **contract-only** profit 4 ways (Bank Savings 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%). **Recurring revenue is decoupled from project profit** — paid recurring installments and active general recurring revenue flow directly into the bank spendable pool, which funds operations and partner dividend payouts. Domain expiries and recurring revenue end-dates trigger countdown alerts on the dashboard.
+Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects (free or paid). **The bank holds ALL our money** — a single cash-basis balance = every dinar actually received minus everything actually spent, paid to partners, and moved to secret investment. There is **no profit-split pot** and **no "bank spendable"** figure. The **10% founder shares** (Suhaib/Mohammed) are still displayed, derived from project profit, but they're informational (money only leaves the bank when a withdrawal/dividend is recorded). **Secret Investment is a year-end event**: 25% of each year's net profit is set aside — at year-end we physically move it out, "mark as moved" (recorded in `secret_investment_transfers`), and it reduces the bank; you can browse previous/future years. **Everything is cash-basis**: a figure counts only once money is received/paid via dated records (recurring revenue/expenses count only when a period is marked received/paid, tagged or general). Domain expiries and recurring end-dates trigger countdown alerts.
 
 ## Tech Stack
 - **Frontend**: React 18 + Vite 4 (vanilla JSX, no TypeScript)
@@ -38,7 +38,8 @@ supabase/
     ├── 20260320050000_recurring_payments.sql .. Period-paid tracking tables
     ├── 20260320060000_recurring_nullable_dates.sql .. Make start_date / next_due nullable
     ├── 20260510000000_dividends_domains_expiries.sql .. partner_dividends, domains, end_date columns
-    └── 20260615000000_payment_schedule.sql .. payment_schedule + payment_schedule_payments (tracking layer) + sample seed
+    ├── 20260615000000_payment_schedule.sql .. payment_schedule + payment_schedule_payments (tracking layer) + sample seed
+    └── 20260701000000_secret_investment_yearly.sql .. secret_investment_transfers (yearly 25% set-aside) + RBAC/audit; recurring_*_payments.project_id nullable (general recurring markable); payment_schedule_payments.amount (frozen per-occurrence)
 
 cloudflare/
 ├── keep-alive/
@@ -61,19 +62,20 @@ Tables:
 - `projects` — client projects (`total_value` may be 0 for "free + recurring upsell" projects)
 - `payments` — project payments (FK to projects, CASCADE delete)
 - `expenses` — project expenses (FK to projects, CASCADE delete)
-- `bank_spending` — spending from bank savings share
-- `secret_investment_spending` — spending from secret investment share (renamed from charity_spending)
+- `bank_spending` — general spending from the bank
+- `secret_investment_spending` — **DEPRECATED** (old pot model). No longer used by the UI; kept for audit history.
+- `secret_investment_transfers` — yearly secret-investment set-aside: `year` (UNIQUE), `amount`, `moved_date`, `note`. One "moved" row per year; reduces the bank.
 - `partner_withdrawals` — share-based withdrawals (drawn against the partner's accumulated 10% share); CHECK on partner_name ('suhaib'/'mohammed')
 - `partner_dividends` — bank-funded dividend payouts (the salary mechanism); CHECK on partner_name
 - `budgets` — budget categories with name, allocated_amount, description
 - `budget_spending` — spending against budgets (FK to budgets, CASCADE delete)
 - `recurring_revenue` — recurring revenue items (nullable project_id, frequency: monthly/yearly, active, optional `end_date` for expiry alerts)
 - `recurring_expenses` — recurring expense items (nullable project_id, frequency: monthly/yearly, active, optional `end_date`)
-- `recurring_revenue_payments` — paid period records for project-linked recurring revenue (UNIQUE on recurring_revenue_id+period_date)
-- `recurring_expense_payments` — paid period records for project-linked recurring expenses (UNIQUE on recurring_expense_id+period_date)
+- `recurring_revenue_payments` — received-period records for recurring revenue (UNIQUE on recurring_revenue_id+period_date). `project_id` is **nullable** — general (untagged) recurring is markable too, credited to the bank.
+- `recurring_expense_payments` — paid-period records for recurring expenses (UNIQUE on recurring_expense_id+period_date). `project_id` **nullable** (general recurring expenses).
 - `domains` — owned domains with `expiry_date`, optional `project_id` and `recurring_revenue_id` links, `registrar`, `auto_renew`, `notes`
 - `payment_schedule` — **tracking-only** payment todos (NOT money). `direction` ('incoming'/'outgoing'), `category` (domain/cr/vps/hosting/apple/android/amc/other), `name`, `amount`, `frequency` (monthly/yearly/one_time), `start_date`, optional `end_date`, nullable `project_id`, `active` (false = closed/ended), `notes`
-- `payment_schedule_payments` — one row per due occurrence marked paid (the "todo done" record); UNIQUE on (payment_schedule_id, period_date), CASCADE delete
+- `payment_schedule_payments` — one row per due occurrence marked paid (the "todo done" record); UNIQUE on (payment_schedule_id, period_date), CASCADE delete. Has a nullable `amount` — captured at mark-paid so each occurrence/year is frozen independently (editing an item's future amount never rewrites a paid year).
 
 All tables have:
 - RLS enabled (authenticated users only)
@@ -115,47 +117,45 @@ Note: this app uses TEXT primary keys (not SERIAL/IDENTITY), so no sequence gran
 
 ## Business Logic
 
-### Project Profit (Contract + Tagged Recurring)
-A project gets credited for recurring revenue tagged to it, so projects earning recurring aren't shown as money-losers. The 4-way profit split (55/10/10/25) applies to this combined profit, so paid project-linked recurring still ends up flowing to the bank pool through the bank's 55% share — no double counting.
+### Project Profit (cash-basis; drives the 10% founder display)
+Per-project profit uses only cash actually received/paid.
 - **contractPayments** = sum of `payments` records for the project
-- **projRecurringPaid** = sum of `recurring_revenue_payments` amounts for streams tagged to this project
-- **totalPaid** = contractPayments + projRecurringPaid (recurring credited to the project)
-- **totalRevenue** = totalPaid
-- **totalPotential** = totalValue (contract amount; "paid" status is contract-based — recurring is ongoing/extra)
-- **totalExpenses** = project `expenses` + all generated recurring-expense periods linked to this project (accrual basis)
+- **projRecurringPaid** = sum of `recurring_revenue_payments` for this project (`rp.project_id === p.id`)
+- **projRecurringExpPaid** = sum of `recurring_expense_payments` for this project (cash-basis, NOT accrual)
+- **totalRevenue** = contractPayments + projRecurringPaid
+- **totalExpenses** = project `expenses` + projRecurringExpPaid
 - **profit** = totalRevenue − totalExpenses
-- **Profit Split** (only when profit > 0): Bank 55%, Suhaib 10%, Mohammed 10%, Secret Investment 25%
-- **unpaid** = max(0, totalValue − contractPayments). Free projects (`totalValue = 0`) are immediately marked Paid (badge: "Free"). Status badge = "Paid" / "Partial" / "Unpaid" tracks contract only.
+- **Founder shares** (only when profit > 0): `suhaibShare` = `mohammedShare` = profit × 0.10 (informational display only; there is NO 55% bank pot or 25% per-project secret share anymore)
+- **unpaid** = max(0, totalValue − contractPayments). Free projects (`totalValue = 0`) show "Free". Status badge tracks contract only.
 - **isPaid** = unpaid <= 0
 
-### Recurring Revenue Flow
-- Project-linked recurring revenue uses period tracking (`generateRecurringPeriods` from start_date through the current period). A record in `recurring_revenue_payments` for a (recurring_revenue_id, period_date) pair = paid; missing = unpaid.
-- **Paid project-linked recurring is credited to the project** and split 4 ways via the project's profit. Bank gets 55% of it (not 100%).
-- **General (untagged) recurring revenue flows 100% directly to the bank pool** (active items × amount, since general items don't have payment tracking).
-- Recurring expenses behave by tag:
-  - Project-linked recurring expenses stay on the project (counted in project totalExpenses, accrual basis — all periods count regardless of paid status).
-  - General recurring expenses (no project_id) come out of the bank pool (`generalRecurringExp`).
+### Recurring Revenue/Expense Flow (cash-basis)
+- ALL recurring (tagged AND general) is credited only when a period is marked received/paid via `recurring_*_payments`. The Recurring view has an expandable per-period mark-paid table for every item; project-linked items also appear in Project Detail. General items use `project_id = null` on the payment record.
+- Received recurring revenue and paid recurring expenses flow into the cash-basis bank like any other dated income/expense. No flat `active × amount` projection is used in money math (that only appears as informational "Year Potential").
 
-### Partner Compensation (Two Pots)
-1. **10% Share** (project profit only) — accumulates per project, drawn down via `partner_withdrawals`. Available = earned − withdrawn.
-2. **Bank Dividends** — flat payouts from `bankSpendable`, recorded in `partner_dividends`. This is the salary mechanism funded by recurring revenue. Capped only by bank spendable.
+### Partner Compensation
+1. **10% Share** (informational, project profit only) — accumulates per project, drawn down via `partner_withdrawals`. Available = earned − withdrawn.
+2. **Bank Dividends** — payouts recorded in `partner_dividends`, drawn from the bank (capped by `bankBalance`). The salary mechanism.
+Both reduce the bank when recorded.
 
-### Bank & Cash Position
-- **globalBank.income** = `projectShare` (55% of all project profit, which already includes tagged paid recurring) + `recurringRevenueIncome.generalActive` (untagged recurring flows 100% direct to bank)
-  - **NOT** added separately: tagged paid recurring (avoids double counting — it's already in projectShare via the 55% split)
-- **globalBank.spent** = `bank_spending` records only
-- **bankSpendable** = `globalBank.income − globalBank.spent − totalBudgetSpent − totalDividendsPaid − generalRecurringExp`
-  (Budgets, dividends, and general recurring expenses all draw from the bank pool.)
-- **globalRevenue** = `globalProjectRevenue` (contract + tagged recurring paid) + `recurringRevenueIncome.generalActive` (no double counting)
+### Secret Investment (yearly, 25%)
+- **netProfitForYear(Y)** = incomeReceived(dated in Y) − expensesPaid(dated in Y). Excludes owner distributions and secret transfers (those are profit distribution, not cost).
+- **secretDueForYear(Y)** = `max(0, netProfitForYear(Y)) × 0.25`.
+- At year-end, "Mark as moved" writes a `secret_investment_transfers` row (`year`, `amount` default = due, `moved_date`), which **reduces the bank**. Undo = delete the row. The Secret Investment view is a **year browser** (prev/current/future).
+
+### Bank & Cash Position (the only bank figure)
+- **incomeReceived(pred)** = contract `payments` + `recurring_revenue_payments`, filtered by date predicate.
+- **expensesPaid(pred)** = project `expenses` + `recurring_expense_payments` + `bank_spending` + budget `spending`.
+- **distributions** = `partner_withdrawals` + `partner_dividends`.
+- **secretMovedTotal** = sum of `secret_investment_transfers.amount`.
+- **bankBalance** = `incomeReceived() − expensesPaid() − distributions() − secretMovedTotal` (cumulative, all-time = all our real money). Replaces the old `globalBank`/`bankSpendable`/`totalPhysicalBank`.
+- **globalRevenue** = `incomeReceived()` (all cash received).
 
 ### Operating vs Distributions
-Distinction between business costs and money paid to ourselves matters for margin calculations.
-- **operatingOutflow** = project expenses (incl. project-linked recurring) + general recurring expenses + bank spending + budget spending + secret investment spending
-  - Does NOT include partner withdrawals or dividends
-- **operatingNet** = globalRevenue − operatingOutflow (what the business made before paying owners)
-- **globalMargin** = operatingNet ÷ globalRevenue × 100 (operating margin, shown on Dashboard and Projects view)
-- **totalDistributions** = partner withdrawals + dividends paid (money out to Suhaib/Mohammed)
-- **totalPhysicalBank** = operatingNet − totalDistributions (true cash position — what's actually in the bank)
+- **operatingOutflow** = `expensesPaid()` (project + recurring paid + bank + budget spending). Does NOT include partner payouts or secret transfers.
+- **operatingNet** = globalRevenue − operatingOutflow (cash the business made before paying owners).
+- **globalMargin** = operatingNet ÷ globalRevenue × 100 (operating margin).
+- **totalDistributions** = partner withdrawals + dividends. **secretMovedTotal** = secret transfers. Both, plus operatingOutflow, subtract from `bankBalance`.
 
 ### Expiry Alerts
 - `daysUntil(date)` and `reminderThresholdDays(frequency)` (90 days for yearly, 7 for monthly).
@@ -177,7 +177,8 @@ A todo/reminder layer for incoming & outgoing obligations (domains, CR, VPS, App
 Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the **service_role** key (bypasses RLS) and sends ONE mobile-responsive HTML email via **Resend** to `revenueautomationlab@gmail.com`, cc `saeedalsaeedbusiness@gmail.com` + `suhaibrajabo@gmail.com`. Contents: payments **due tomorrow** (the reminder) + overdue + rest-of-week, **yesterday's transactions**, and a **KPI snapshot** (`computeSnapshot()` is a faithful port of App.jsx profit/bank/margin math — keep in sync). Secrets via `wrangler secret put`: `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` (guards the `/?token=…[&send=1]` manual preview/send endpoint). Sender `reminders@mail.raltech.dev` (domain `mail.raltech.dev` verified in the Resend account revenueautomationlab@gmail.com; see worker README).
 
 ### Roles, Audit & Admin (multi-user)
-- **Roles**: `app_users` (email → `reader`|`full`, status). `revenueautomationlab@gmail.com` is hard-coded to `admin` in `app_user_role()` (never lockable-out). Helpers `app_can_read()` / `app_can_write()` / `app_is_admin()`. **Role-aware RLS on all 16 data tables** (reader = SELECT only; full = read/write/delete; admin = all). `service_role` (workers) bypasses RLS.
+- **Roles**: `app_users` (email → `reader`|`full`, status). `revenueautomationlab@gmail.com` is hard-coded to `admin` in `app_user_role()` (never lockable-out). Helpers `app_can_read()` / `app_can_write()` / `app_is_admin()`. **Role-aware RLS + audit on all data tables** (now 17, incl. `secret_investment_transfers`; reader = SELECT only; full = read/write/delete; admin = all). `service_role` (workers) bypasses RLS.
+- **TODO (backup/restore gap):** `db_snapshots` + `restore_snapshot()` still cover the original 16 business tables — `secret_investment_transfers` is not yet backed up/restored (it survives a restore untouched). Add it to the snapshot list + `restore_snapshot` RPC when convenient.
 - **Auth**: `AuthContext.resolveAccess()` allows the admin + any active onboarded Gmail; exposes `role`/`isAdmin`/`canWrite`. Non-onboarded accounts are force-signed-out. UI write guard `guardWrite()` (RLS is the real enforcement).
 - **Audit log**: `audit_log` + AFTER row triggers (`audit_trigger`, SECURITY DEFINER) on every data table → old/new JSONB + actor email + timestamp. Admin-only SELECT; admin UPDATE only sets `reverted_at`. Per-change revert via `applyAuditRevert()` (INSERT→delete, DELETE→re-insert, UPDATE→restore old; the revert is itself audited).
 - **Admin page** (`AdminView`, admin-only nav): Users & Roles (onboard sends an invite email), Audit Log (filter + per-change Revert), Backups (list snapshots, Back up now, Export JSON, OTP-gated Restore).
@@ -185,31 +186,27 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 - **Domain renewal cost**: `domains.renewal_cost` flows into the Payments tab outgoing totals/timeline/email (still tracking-only — not in bank/profit math).
 
 ### Key Computed Values (all via useMemo or top-level memos)
-- `projectStats` — per-project stats: `{ contractPayments, projRecurringPaid, projRecurringExpTotal, totalPaid, totalRevenue, totalExpenses, profit, bankShare, suhaibShare, mohammedShare, secretInvestmentShare, unpaid, isPaid, ... }`
-- `recurringRevenueIncome` — `{ projectLinkedPaid, generalActive, total }`
-- `globalBank` — `{ projectShare, income, spent, balance }`
-- `globalSecretInvestment` — `{ income, spent, balance }` (project profit's 25% only — no recurring)
-- `globalProjectRevenue` — sum(p.totalRevenue) including tagged recurring
-- `globalContractRevenue` — sum(p.contractPayments) (contract only)
-- `globalRevenue` — globalProjectRevenue + generalActive
-- `globalExpenses` — project expenses (incl. project-linked recurring) + generalRecurringExp
-- `operatingOutflow` — globalExpenses + bank/budget/secret spending (excludes partner payouts)
+- `projectStats` — per-project: `{ contractPayments, projRecurringPaid, projRecurringExpPaid, totalRevenue, totalExpenses, profit, suhaibShare, mohammedShare, unpaid, isPaid, ... }` (no bankShare/secretInvestmentShare)
+- `incomeReceived(pred)` / `expensesPaid(pred)` / `distributions(pred)` — cash-basis primitives (date predicate)
+- `bankBalance` — all our money (cumulative). **The** bank figure.
+- `netProfitForYear(y)` / `secretDueForYear(y)` / `secretMovedForYear(y)` — yearly secret-investment math
+- `recurringRevenueIncome` — `{ projectLinkedPaid, generalPaid, total }` (all from payment records)
+- `globalContractRevenue` — sum(p.contractPayments); `globalRevenue` — incomeReceived()
+- `globalExpenses` — project + recurring-expense-paid (the "expenses" card); `operatingOutflow` — expensesPaid()
 - `operatingNet` / `globalMargin` — pre-distribution net & margin
-- `totalDistributions` — withdrawals + dividends
-- `bankSpendable` / `totalPhysicalBank` — bank pool minus its outflows; true cash position
-- `budgetStats` — per-budget allocated vs spent
-- `expiryAlerts` — sorted list of upcoming domain/recurring expiries
+- `totalDistributions` — withdrawals + dividends; `secretMovedTotal` — secret transfers
+- `budgetStats`, `expiryAlerts` — unchanged
 
 ## App Views
 1. **Dashboard** — Expiry alerts banner (when applicable), comprehensive revenue/outflow/margin/bank stat cards, project profit distribution, partner balances with both share-withdraw and bank-dividend buttons, recent activity table (mixed withdrawals + dividends), budget & recurring quick overview, projects table
 2. **Projects** — Summary stats (paid/unpaid/expenses/project profit/all-in margin/in-bank), project cards with payment progress (free projects show "Free" badge)
 3. **Project Detail** — Contract value (or "Free + Recurring" badge), payments and expenses tables, profit split (contract-only), recurring revenue periods (mark paid/unpaid), recurring expenses periods
-4. **Bank Savings** — Total in bank, bank inflow/outflow/spendable, bank pool composition (inflow & outflow lines), partner dividends payout & history, spending history, project contributions, recurring impact
+4. **Bank** — Total in bank (`bankBalance` = all our money), money received / spent / paid-out cards, "Where the money went" composition (received − expenses − payouts − secret moved = balance), partner dividends payout & history, spending history, per-project profit contributions
 5. **Budgets** — Budget cards with progress bars, spending tracking, CRUD
 6. **Recurring** — Revenue + expenses tables with frequency, project, end-date column (yellow when within reminder threshold), active/pause, full CRUD. Add-revenue modal supports optional inline domain creation.
 7. **Payments** — Tracking-only payment todos (does not affect money). Header note states this. Stat cards (Due This Week / Overdue / Outgoing ≤30d / Incoming ≤30d). Sub-tabs: **Upcoming** (timeline grouped Overdue / This week / Next 30 days / Later — next unpaid occurrence per active item + domain renewals, with Mark-paid / Renew), **Outgoing** + **Incoming** (management lists: next due, status, ✓N paid, edit/close-reopen/delete, expandable per-occurrence history toggle), **Domains** (the folded-in `<DomainsView embedded />` — full domain CRUD). Sidebar nav shows a badge of items due ≤14 days.
 8. **Reports** — Monthly P&L (contract + recurring revenue), Partner Summary (earned/withdrawn/dividends), Budget Utilization, Recurring Obligations, Cash Flow Summary (with dividends + recurring lines), Project Performance
-9. **Secret Investment** — Secret investment share (project profit 25%), spending, balance, spending history
+9. **Secret Investment** — Yearly browser (prev/current/future year selector). Per year: net profit, 25% due, Moved/Pending status, "Mark as moved" (writes a `secret_investment_transfers` row → reduces bank), and a transfer-history table across years.
 
 ## Key Patterns
 - Single-file App.jsx with nested function components
@@ -230,6 +227,7 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 - **Supabase dashboard requirement**: `http://localhost:5175/auth/callback` must be listed in Authentication → URL Configuration → Redirect URLs
 - `.env.development` contains Supabase credentials (gitignored) — same Supabase project for local and production
 - AuthCallbackPage explicitly exchanges session on mount (checks URL hash/code params)
+- **DEV auth bypass (local testing only):** set `VITE_AUTH_BYPASS=true` in `.env.development` to skip Google OAuth and load a fake admin + mock data (`AuthContext.DEV_AUTH_BYPASS`, `supabaseService.mockState()`). Gated on `import.meta.env.DEV`, so the production `vite build` strips it entirely — it can never ship live. Writes won't persist (no real session); it's for UI/layout verification (e.g. Playwright at mobile widths).
 
 ## MCP Tools Setup
 - **Playwright MCP**: Browser automation and testing — installed globally via `@anthropic-ai/claude-code` with `@anthropic-ai/mcp-server-playwright` package

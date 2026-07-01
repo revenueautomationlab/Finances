@@ -20,7 +20,49 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Export supabase instance for use in other modules (like AuthContext)
 export { supabase };
+// DEV-ONLY: mock data for local layout/UI testing when auth is bypassed (see AuthContext).
+// Guarded by import.meta.env.DEV so the production build strips it entirely.
+const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
+function mockState() {
+  const d = (m, day) => `2026-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return {
+    projects: [
+      { id: "p1", name: "Acme Website Redesign", totalValue: 4500, createdAt: d(1, 5),
+        payments: [{ id: "pay1", amount: 2000, date: d(2, 1), note: "Deposit" }, { id: "pay2", amount: 2500, date: d(4, 10), note: "Final" }],
+        expenses: [{ id: "e1", amount: 300, date: d(2, 15), description: "Stock photos" }] },
+      { id: "p2", name: "Beta App (Free + Recurring)", totalValue: 0, createdAt: d(3, 1), payments: [], expenses: [] },
+    ],
+    bankSpending: [{ id: "bs1", amount: 150, date: d(3, 20), description: "Domain tools" }],
+    secretInvestmentSpending: [],
+    partnerWithdrawals: [{ id: "w1", partnerName: "suhaib", amount: 100, date: d(5, 1), note: "" }],
+    partnerDividends: [{ id: "dv1", partnerName: "mohammed", amount: 200, date: d(5, 15), note: "May" }],
+    budgets: [{ id: "b1", name: "Marketing", allocatedAmount: 1000, description: "Ads", createdAt: d(1, 1), spending: [{ id: "bsp1", amount: 250, date: d(4, 1), description: "Google Ads" }] }],
+    recurringRevenue: [
+      { id: "rr1", projectId: "p1", amount: 120, frequency: "monthly", description: "Acme hosting", startDate: d(2, 1), nextDue: null, endDate: null, active: true, createdAt: d(2, 1) },
+      { id: "rr2", projectId: null, amount: 300, frequency: "monthly", description: "General retainer (untagged)", startDate: d(1, 1), nextDue: null, endDate: null, active: true, createdAt: d(1, 1) },
+    ],
+    recurringExpenses: [{ id: "re1", projectId: null, amount: 40, frequency: "monthly", description: "VPS hosting", startDate: d(1, 1), nextDue: null, endDate: null, active: true, createdAt: d(1, 1) }],
+    recurringRevenuePayments: [
+      { id: "rrp1", recurringRevenueId: "rr1", projectId: "p1", periodDate: d(2, 1), amount: 120, note: null, createdAt: d(2, 1) },
+      { id: "rrp2", recurringRevenueId: "rr1", projectId: "p1", periodDate: d(3, 1), amount: 120, note: null, createdAt: d(3, 1) },
+    ],
+    recurringExpensePayments: [{ id: "rep1", recurringExpenseId: "re1", projectId: null, periodDate: d(1, 1), amount: 40, note: null, createdAt: d(1, 1) }],
+    domains: [{ id: "dom1", name: "acme-client-portal.com", expiryDate: d(9, 15), projectId: "p1", recurringRevenueId: null, registrar: "Cloudflare", autoRenew: true, renewalCost: 12, notes: "", createdAt: d(1, 1) }],
+    paymentSchedule: [
+      { id: "ps1", direction: "outgoing", category: "apple", name: "Apple Developer Program Membership", amount: 37.7, frequency: "yearly", startDate: d(1, 20), endDate: null, projectId: null, active: true, notes: "", createdAt: d(1, 1) },
+      { id: "ps2", direction: "outgoing", category: "vps", name: "Hetzner VPS", amount: 15, frequency: "monthly", startDate: d(1, 1), endDate: null, projectId: null, active: true, notes: "", createdAt: d(1, 1) },
+      { id: "ps3", direction: "incoming", category: "amc", name: "Acme Annual Maintenance Contract", amount: 800, frequency: "yearly", startDate: d(2, 1), endDate: null, projectId: "p1", active: true, notes: "", createdAt: d(1, 1) },
+    ],
+    paymentSchedulePayments: [
+      { id: "psp1", paymentScheduleId: "ps2", periodDate: d(1, 1), paidDate: d(1, 2), amount: 15, note: null, createdAt: d(1, 2) },
+      { id: "psp2", paymentScheduleId: "ps2", periodDate: d(2, 1), paidDate: d(2, 3), amount: 15, note: null, createdAt: d(2, 3) },
+    ],
+    secretInvestmentTransfers: [{ id: "sit1", year: 2025, amount: 320.5, movedDate: "2025-12-31", note: "Year-end 2025", createdAt: "2025-12-31" }],
+  };
+}
+
 export async function fetchState() {
+  if (DEV_AUTH_BYPASS) return mockState();
   try {
     const [
       { data: projects },
@@ -36,6 +78,7 @@ export async function fetchState() {
       { data: domains },
       { data: paymentSchedule },
       { data: paymentSchedulePayments },
+      { data: secretInvestmentTransfers },
     ] = await Promise.all([
       supabase.from("projects").select("*, payments(*), expenses(*)"),
       supabase.from("bank_spending").select("*"),
@@ -50,6 +93,7 @@ export async function fetchState() {
       supabase.from("domains").select("*"),
       supabase.from("payment_schedule").select("*"),
       supabase.from("payment_schedule_payments").select("*"),
+      supabase.from("secret_investment_transfers").select("*"),
     ]);
 
     const transformedProjects = projects.map((p) => ({
@@ -185,8 +229,17 @@ export async function fetchState() {
         paymentScheduleId: pp.payment_schedule_id,
         periodDate: pp.period_date,
         paidDate: pp.paid_date,
+        amount: pp.amount == null ? null : parseFloat(pp.amount),
         note: pp.note,
         createdAt: pp.created_at,
+      })),
+      secretInvestmentTransfers: (secretInvestmentTransfers || []).map((t) => ({
+        id: t.id,
+        year: t.year,
+        amount: parseFloat(t.amount),
+        movedDate: t.moved_date,
+        note: t.note,
+        createdAt: t.created_at,
       })),
     };
   } catch (error) {
@@ -343,6 +396,21 @@ export async function deleteSecretInvestmentSpending(id) {
     .delete()
     .eq("id", id);
 
+  if (error) throw error;
+}
+
+// Yearly secret-investment transfers (25% of a year's net profit, physically moved out).
+export async function addSecretInvestmentTransfer(year, amount, movedDate, note) {
+  const { data, error } = await supabase
+    .from("secret_investment_transfers")
+    .insert([{ id: generateId(), year, amount, moved_date: movedDate, note: note || null }])
+    .select();
+  if (error) throw error;
+  return data[0];
+}
+
+export async function deleteSecretInvestmentTransfer(id) {
+  const { error } = await supabase.from("secret_investment_transfers").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -646,16 +714,23 @@ export async function setPaymentScheduleActive(id, active) {
   if (error) throw error;
 }
 
+// Edit the going-forward expected amount for a schedule item (affects only future/unpaid
+// occurrences — already-paid occurrences keep their own captured amount).
+export async function setPaymentScheduleAmount(id, amount) {
+  const { error } = await supabase.from("payment_schedule").update({ amount }).eq("id", id);
+  if (error) throw error;
+}
+
 export async function deletePaymentSchedule(id) {
   const { error } = await supabase.from("payment_schedule").delete().eq("id", id);
   if (error) throw error;
 }
 
 // Mark a single due occurrence paid / unpaid (the "todo done" toggle)
-export async function addPaymentSchedulePayment(paymentScheduleId, periodDate, paidDate, note) {
+export async function addPaymentSchedulePayment(paymentScheduleId, periodDate, paidDate, note, amount) {
   const { data, error } = await supabase
     .from("payment_schedule_payments")
-    .insert([{ id: generateId(), payment_schedule_id: paymentScheduleId, period_date: periodDate, paid_date: paidDate || null, note: note || null }])
+    .insert([{ id: generateId(), payment_schedule_id: paymentScheduleId, period_date: periodDate, paid_date: paidDate || null, note: note || null, amount: amount == null ? null : amount }])
     .select();
   if (error) throw error;
   return data[0];

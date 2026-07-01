@@ -3,6 +3,12 @@ import { supabase } from "../services/supabaseService";
 
 const AuthContext = createContext(null);
 
+// DEV-ONLY auth bypass for local UI/layout testing. Active ONLY when running under `bun dev`
+// (import.meta.env.DEV) AND VITE_AUTH_BYPASS=true is set in .env.development. The production
+// `vite build` compiles import.meta.env.DEV to false, so this is dead-code-eliminated and can
+// NEVER be reachable in the deployed app. Pairs with mock data in supabaseService.fetchState.
+export const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
+
 const ADMIN_EMAIL = "revenueautomationlab@gmail.com";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -87,13 +93,16 @@ async function forceFullSignOut() {
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // Dev bypass: start as a fake admin and skip all Supabase auth. Hooks stay unconditional
+  // (order never changes) so React Fast Refresh doesn't choke during local dev.
+  const [user, setUser] = useState(DEV_AUTH_BYPASS ? { email: "dev-local@bypass" } : null);
+  const [role, setRole] = useState(DEV_AUTH_BYPASS ? "admin" : null);
+  const [loading, setLoading] = useState(!DEV_AUTH_BYPASS);
   const [error, setError] = useState(null);
   const isForceSigningOut = useRef(false);
 
   useEffect(() => {
+    if (DEV_AUTH_BYPASS) return undefined; // no Supabase session in bypass mode
     let cancelled = false;
 
     // Resolve a session to user+role and update state. NEVER call this synchronously inside
