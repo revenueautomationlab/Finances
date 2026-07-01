@@ -3408,36 +3408,56 @@ export default function App() {
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-600" onClick={() => deletePaymentItem(item.id, item.name)} title="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
                   </div>
                 </div>
-                {expanded && (
-                  <div className="border-t bg-muted/30 px-4 py-3">
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Payment history</p>
-                    {occurrences.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No occurrences yet.</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {[...occurrences].reverse().slice(0, 18).map((occ) => {
-                          const existing = paymentSchedulePayments.find((pp) => pp.paymentScheduleId === item.id && pp.periodDate === occ);
-                          return (
-                            <button
-                              key={occ}
-                              disabled={loading}
-                              onClick={() => togglePaymentPaid(item, occ, existing)}
-                              className={cn(
-                                "rounded-md border px-2 py-1 text-[11px] tabular-nums transition-colors",
-                                existing ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-input bg-card text-muted-foreground hover:bg-muted",
-                              )}
-                              title={existing ? `Paid ${currency(existing.amount ?? item.amount)} — click to undo` : "Click to mark paid"}
-                            >
-                              {existing ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : null}
-                              {formatDate(occ)}
-                              {existing ? <span className="ml-1 opacity-70">{currency(existing.amount ?? item.amount)}</span> : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
+                {expanded && (() => {
+                  const todayISO = toISODate(new Date());
+                  const upcoming = occurrences.filter((o) => o > todayISO).slice(0, 3);   // next few (pre-pay)
+                  const history = occurrences.filter((o) => o <= todayISO).reverse();     // all past + current, newest first
+                  const chip = (occ, isFuture) => {
+                    const existing = paymentSchedulePayments.find((pp) => pp.paymentScheduleId === item.id && pp.periodDate === occ);
+                    const overdue = !existing && !isFuture;
+                    return (
+                      <button
+                        key={occ}
+                        disabled={loading}
+                        onClick={() => togglePaymentPaid(item, occ, existing)}
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[11px] tabular-nums transition-colors",
+                          existing ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            : overdue ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                            : "border-input bg-card text-muted-foreground hover:bg-muted",
+                        )}
+                        title={existing ? `Paid ${currency(existing.amount ?? item.amount)} — click to mark unpaid` : (overdue ? "Overdue — click to mark paid" : "Upcoming — click to mark paid early")}
+                      >
+                        {existing ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : null}
+                        {formatDate(occ)}
+                        {existing ? <span className="ml-1 opacity-70">{currency(existing.amount ?? item.amount)}</span> : null}
+                      </button>
+                    );
+                  };
+                  return (
+                    <div className="border-t bg-muted/30 px-4 py-3 space-y-3">
+                      <p className="text-[11px] text-muted-foreground">
+                        Starts {item.startDate ? formatDate(item.startDate) : "—"} · {frequencyLabel(item.frequency)} · click any period to toggle paid/unpaid. Wrong start date? Use the edit (pencil) button.
+                      </p>
+                      {occurrences.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No occurrences yet — set a start date.</p>
+                      ) : (
+                        <>
+                          {upcoming.length > 0 && (
+                            <div>
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upcoming</p>
+                              <div className="flex flex-wrap gap-1.5">{upcoming.map((o) => chip(o, true))}</div>
+                            </div>
+                          )}
+                          <div>
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">History ({history.length})</p>
+                            <div className="flex flex-wrap gap-1.5">{history.map((o) => chip(o, false))}</div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
