@@ -1249,6 +1249,42 @@ export default function App() {
     }
   };
 
+  // Bulk "catch up": mark every occurrence on/before `throughISO` paid (skipping already-paid).
+  const markPaidThrough = async (item, occurrences, throughISO) => {
+    if (!guardWrite()) return;
+    const paid = paidPeriodsByScheduleItem[item.id] || new Set();
+    const toMark = occurrences.filter((o) => o <= throughISO && !paid.has(o));
+    if (!toMark.length) { toast.info("Already up to date."); return; }
+    setLoading(true);
+    try {
+      for (const o of toMark) await dbAddPaymentSchedulePayment(item.id, o, toISODate(new Date()), null, item.amount);
+      await refreshData();
+      toast.success(`Marked ${toMark.length} period${toMark.length !== 1 ? "s" : ""} paid`);
+    } catch (error) {
+      toast.error(`Failed: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete every paid record for an item (used to reset, or to clear orphaned records).
+  const clearPayments = (item, rows, label) => {
+    if (!rows.length) { toast.info("Nothing to clear."); return; }
+    showConfirm(label || "Clear payments", `Unmark ${rows.length} paid period${rows.length !== 1 ? "s" : ""} for "${item.name}"?`, "Clear", async () => {
+      setLoading(true);
+      try {
+        for (const r of rows) await dbDeletePaymentSchedulePayment(r.id);
+        await refreshData();
+        toast.success("Cleared");
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
+  };
+
   // Renewing a domain = mark its renewal "paid": bump expiry by one year.
   const renewDomain = async (d) => {
     if (!guardWrite()) return;
@@ -3412,6 +3448,10 @@ export default function App() {
                   const todayISO = toISODate(new Date());
                   const upcoming = occurrences.filter((o) => o > todayISO).slice(0, 3);   // next few (pre-pay)
                   const history = occurrences.filter((o) => o <= todayISO).reverse();     // all past + current, newest first
+                  const occSet = new Set(occurrences);
+                  // Paid records that don't line up with the current occurrence grid (e.g. after a start-date edit).
+                  const orphanRows = paymentSchedulePayments.filter((pp) => pp.paymentScheduleId === item.id && !occSet.has(pp.periodDate));
+                  const allRows = paymentSchedulePayments.filter((pp) => pp.paymentScheduleId === item.id);
                   const chip = (occ, isFuture) => {
                     const existing = paymentSchedulePayments.find((pp) => pp.paymentScheduleId === item.id && pp.periodDate === occ);
                     const overdue = !existing && !isFuture;
@@ -3436,9 +3476,19 @@ export default function App() {
                   };
                   return (
                     <div className="border-t bg-muted/30 px-4 py-3 space-y-3">
-                      <p className="text-[11px] text-muted-foreground">
-                        Starts {item.startDate ? formatDate(item.startDate) : "—"} · {frequencyLabel(item.frequency)} · click any period to toggle paid/unpaid. Wrong start date? Use the edit (pencil) button.
-                      </p>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <p className="text-[11px] text-muted-foreground">
+                          Starts {item.startDate ? formatDate(item.startDate) : "—"} · {frequencyLabel(item.frequency)} · click any period to toggle. Wrong start date? Edit (pencil).
+                        </p>
+                        <div className="flex gap-1.5">
+                          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={loading || occurrences.length === 0} onClick={() => markPaidThrough(item, occurrences, todayISO)} title="Mark every period up to today as paid">
+                            <CheckCircle2 className="mr-1 h-3 w-3" /> Catch up to today
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground hover:text-red-600" disabled={loading || allRows.length === 0} onClick={() => clearPayments(item, allRows, "Clear all payments")}>
+                            Clear all
+                          </Button>
+                        </div>
+                      </div>
                       {occurrences.length === 0 ? (
                         <p className="text-xs text-muted-foreground">No occurrences yet — set a start date.</p>
                       ) : (
@@ -3454,6 +3504,19 @@ export default function App() {
                             <div className="flex flex-wrap gap-1.5">{history.map((o) => chip(o, false))}</div>
                           </div>
                         </>
+                      )}
+                      {orphanRows.length > 0 && (
+                        <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2">
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">Unmatched paid records ({orphanRows.length})</p>
+                          <p className="mb-1.5 text-[11px] text-amber-700/80">Paid for dates that don't match the current schedule (start date or frequency changed since). Click to remove.</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {[...orphanRows].sort((a, b) => (b.periodDate || "").localeCompare(a.periodDate || "")).map((pp) => (
+                              <button key={pp.id} disabled={loading} onClick={() => togglePaymentPaid(item, pp.periodDate, pp)} className="rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] tabular-nums text-amber-800 hover:bg-amber-200" title={`Paid ${currency(pp.amount ?? item.amount)} for ${formatDate(pp.periodDate)} — click to remove`}>
+                                <X className="mr-1 inline h-3 w-3" />{formatDate(pp.periodDate)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       )}
                     </div>
                   );
