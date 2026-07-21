@@ -58,6 +58,11 @@ function mockState() {
       { id: "psp2", paymentScheduleId: "ps2", periodDate: d(2, 1), paidDate: d(2, 3), amount: 15, note: null, createdAt: d(2, 3) },
     ],
     secretInvestmentTransfers: [{ id: "sit1", year: 2025, amount: 320.5, movedDate: "2025-12-31", note: "Year-end 2025", createdAt: "2025-12-31" }],
+    partners: [
+      { id: "partner_suhaib", partnerName: "suhaib", vestingStart: d(1, 1), createdAt: d(1, 1) },
+      { id: "partner_mohammed", partnerName: "mohammed", vestingStart: d(1, 1), createdAt: d(1, 1) },
+      { id: "partner_hisham", partnerName: "hisham", vestingStart: null, createdAt: d(1, 1) },
+    ],
   };
 }
 
@@ -79,6 +84,7 @@ export async function fetchState() {
       { data: paymentSchedule },
       { data: paymentSchedulePayments },
       { data: secretInvestmentTransfers },
+      { data: partners },
     ] = await Promise.all([
       supabase.from("projects").select("*, payments(*), expenses(*)"),
       supabase.from("bank_spending").select("*"),
@@ -94,6 +100,7 @@ export async function fetchState() {
       supabase.from("payment_schedule").select("*"),
       supabase.from("payment_schedule_payments").select("*"),
       supabase.from("secret_investment_transfers").select("*"),
+      supabase.from("partners").select("*"),
     ]);
 
     const transformedProjects = projects.map((p) => ({
@@ -240,6 +247,12 @@ export async function fetchState() {
         movedDate: t.moved_date,
         note: t.note,
         createdAt: t.created_at,
+      })),
+      partners: (partners || []).map((p) => ({
+        id: p.id,
+        partnerName: p.partner_name,
+        vestingStart: p.vesting_start,
+        createdAt: p.created_at,
       })),
     };
   } catch (error) {
@@ -411,6 +424,15 @@ export async function addSecretInvestmentTransfer(year, amount, movedDate, note)
 
 export async function deleteSecretInvestmentTransfer(id) {
   const { error } = await supabase.from("secret_investment_transfers").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Partner vesting: set/change/clear a partner's vesting start date (rows are seeded,
+// upsert covers a missing row just in case).
+export async function setPartnerVestingStart(partnerName, startDate) {
+  const { error } = await supabase
+    .from("partners")
+    .upsert({ id: `partner_${partnerName}`, partner_name: partnerName, vesting_start: startDate || null }, { onConflict: "partner_name" });
   if (error) throw error;
 }
 

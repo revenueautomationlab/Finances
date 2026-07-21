@@ -18,6 +18,7 @@ import {
   deleteSecretInvestmentTransfer as dbDeleteSecretInvestmentTransfer,
   addPartnerWithdrawal as dbAddPartnerWithdrawal,
   deletePartnerWithdrawal as dbDeletePartnerWithdrawal,
+  setPartnerVestingStart as dbSetPartnerVestingStart,
   addBudget as dbAddBudget,
   updateBudget as dbUpdateBudget,
   deleteBudget as dbDeleteBudget,
@@ -79,7 +80,7 @@ import {
   Menu, LogOut, Users, Wallet, ChevronRight, CircleDollarSign, ArrowUpRight,
   ArrowDownRight, Target, Loader2, AlertTriangle, Percent, CheckCircle2, X,
   Globe, Clock, BadgeDollarSign, CalendarClock, CreditCard, ListChecks, Ban,
-  RotateCcw, ChevronDown, ShieldCheck, History, UserPlus, Lock,
+  RotateCcw, ChevronDown, ShieldCheck, History, UserPlus, Lock, Hourglass, Gem,
 } from "lucide-react";
 
 // --- Helpers ---
@@ -154,6 +155,49 @@ const daysUntil = (dateStr) => {
 
 // Reminder threshold: 90 days for yearly cadence, 7 days for monthly
 const reminderThresholdDays = (frequency) => (frequency === "monthly" ? 7 : 90);
+
+// --- Equity vesting (Suhaib / Mohammed / Hisham, 1/3 each) ---
+// 4-year monthly schedule with a 1-year cliff: nothing vests before 12 full months,
+// then 25% unlocks at the cliff and 1/48 more per completed month after. Computed from
+// today's date on every render, so it "updates daily" for free.
+const VEST_TOTAL_MONTHS = 48;
+const VEST_CLIFF_MONTHS = 12;
+const EQUITY_PER_PARTNER = 1 / 3;
+
+// Full months completed since startStr (negative = start date is in the future).
+const monthsSince = (startStr) => {
+  const s = new Date(startStr + "T00:00:00");
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (today < s) return -1;
+  let m = (today.getFullYear() - s.getFullYear()) * 12 + (today.getMonth() - s.getMonth());
+  if (today.getDate() < s.getDate()) m -= 1;
+  return m;
+};
+
+// ponytail: uses Date month rollover (Jan 31 + 1mo shows Mar 3); dates are indicative only
+const addMonthsISO = (startStr, n) => {
+  const s = new Date(startStr + "T00:00:00");
+  const d = new Date(s.getFullYear(), s.getMonth() + n, s.getDate());
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const vestingStatus = (startStr) => {
+  if (!startStr) return { state: "unset", fraction: 0, months: 0, cliffDate: null, fullDate: null, nextVestDate: null };
+  const cliffDate = addMonthsISO(startStr, VEST_CLIFF_MONTHS);
+  const fullDate = addMonthsISO(startStr, VEST_TOTAL_MONTHS);
+  const m = monthsSince(startStr);
+  if (m < 0) return { state: "future", fraction: 0, months: 0, cliffDate, fullDate, nextVestDate: cliffDate };
+  const fraction = m < VEST_CLIFF_MONTHS ? 0 : Math.min(1, m / VEST_TOTAL_MONTHS);
+  return {
+    state: fraction >= 1 ? "done" : m < VEST_CLIFF_MONTHS ? "cliff" : "vesting",
+    months: Math.min(m, VEST_TOTAL_MONTHS),
+    fraction,
+    cliffDate,
+    fullDate,
+    nextVestDate: fraction >= 1 ? null : addMonthsISO(startStr, m < VEST_CLIFF_MONTHS ? VEST_CLIFF_MONTHS : m + 1),
+  };
+};
 
 const formatExpiryDistance = (days) => {
   if (days === null || days === undefined) return "";
@@ -252,6 +296,7 @@ const initialState = {
   domains: [],
   paymentSchedule: [], paymentSchedulePayments: [],
   secretInvestmentTransfers: [],
+  partners: [],
 };
 
 // --- Stat Card Component ---
@@ -376,7 +421,7 @@ export default function App() {
     setConfirm({ title, message, action, onConfirm, isDangerous });
   };
 
-  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, partnerDividends, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments, domains, paymentSchedule, paymentSchedulePayments, secretInvestmentTransfers } = state;
+  const { projects, bankSpending, secretInvestmentSpending, partnerWithdrawals, partnerDividends, budgets, recurringRevenue, recurringExpenses, recurringRevenuePayments, recurringExpensePayments, domains, paymentSchedule, paymentSchedulePayments, secretInvestmentTransfers, partners } = state;
 
   // --- Computed Values (cash-basis) ---
   // The bank holds ALL our real money — no profit-split pots. Every figure counts only once
@@ -470,8 +515,23 @@ export default function App() {
   }, [recurringRevenuePayments]);
 
   const globalProjectProfit = projectStats.reduce((a, p) => a + p.profit, 0);
-  const globalSuhaib = projectStats.reduce((a, p) => a + p.suhaibShare, 0);
-  const globalMohammed = projectStats.reduce((a, p) => a + p.mohammedShare, 0);
+
+  // --- Partners: Suhaib / Mohammed / Hisham ---
+  // FIX: the 10% share is earned on COMPANY net cash profit (all income received minus ALL
+  // spending: project, recurring, bank spending, budget spending). Bank/budget spending now
+  // reduces what founders can withdraw: 250 in + 250 bank-spent = 0 share.
+  // Hisham becomes a 10% partner from his official start date (set on the Vesting page);
+  // his share only counts income/spending dated on or after that date.
+  const partnerStartOf = (key) => partners.find((x) => x.partnerName === key)?.vestingStart || null;
+  const hishamStart = partnerStartOf("hisham");
+  const hishamActive = !!hishamStart && hishamStart <= toISODate(new Date());
+  const shareEarned = (since) => {
+    const pred = since ? (d) => typeof d === "string" && d >= since : ALL;
+    return Math.max(0, incomeReceived(pred) - expensesPaid(pred)) * 0.10;
+  };
+  const globalSuhaib = shareEarned(null);
+  const globalMohammed = shareEarned(null);
+  const globalHisham = hishamActive ? shareEarned(hishamStart) : 0;
   const globalContractRevenue = projectStats.reduce((a, p) => a + p.contractPayments, 0);
   // Total revenue = all cash received (contract + all recurring paid).
   const globalRevenue = incomeReceived();
@@ -483,19 +543,33 @@ export default function App() {
     + recurringRevenue
       .filter((r) => r.active)
       .reduce((a, r) => a + getYearPotentialCount(r.startDate, r.frequency) * r.amount, 0);
-  const suhaibWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "suhaib");
-  const mohammedWithdrawals = partnerWithdrawals.filter((w) => w.partnerName === "mohammed");
-  const suhaibWithdrawn = suhaibWithdrawals.reduce((a, w) => a + w.amount, 0);
-  const mohammedWithdrawn = mohammedWithdrawals.reduce((a, w) => a + w.amount, 0);
+  const sumForPartner = (arr, key) => arr.filter((x) => x.partnerName === key).reduce((a, x) => a + x.amount, 0);
+  const suhaibWithdrawn = sumForPartner(partnerWithdrawals, "suhaib");
+  const mohammedWithdrawn = sumForPartner(partnerWithdrawals, "mohammed");
   const suhaibAvailable = globalSuhaib - suhaibWithdrawn;
   const mohammedAvailable = globalMohammed - mohammedWithdrawn;
 
   // Bank-funded dividend payouts (the salary mechanism)
-  const suhaibDividends = partnerDividends.filter((d) => d.partnerName === "suhaib");
-  const mohammedDividends = partnerDividends.filter((d) => d.partnerName === "mohammed");
-  const suhaibDividendsTotal = suhaibDividends.reduce((a, d) => a + d.amount, 0);
-  const mohammedDividendsTotal = mohammedDividends.reduce((a, d) => a + d.amount, 0);
-  const totalDividendsPaid = suhaibDividendsTotal + mohammedDividendsTotal;
+  const suhaibDividendsTotal = sumForPartner(partnerDividends, "suhaib");
+  const mohammedDividendsTotal = sumForPartner(partnerDividends, "mohammed");
+  const totalDividendsPaid = partnerDividends.reduce((a, d) => a + d.amount, 0);
+
+  // One row per partner, driving every partner-facing UI (Hisham appears once active).
+  const PARTNER_META = [
+    { key: "suhaib", label: "Suhaib", cardBorder: "border-amber-200/60", iconCls: "bg-amber-100 text-amber-600", dot: "bg-amber-500", tile: "bg-amber-50", statVariant: "partner1" },
+    { key: "mohammed", label: "Mohammed", cardBorder: "border-violet-200/60", iconCls: "bg-violet-100 text-violet-600", dot: "bg-violet-500", tile: "bg-violet-50", statVariant: "partner2" },
+    { key: "hisham", label: "Hisham", cardBorder: "border-indigo-200/60", iconCls: "bg-indigo-100 text-indigo-600", dot: "bg-indigo-500", tile: "bg-indigo-50", statVariant: "bank" },
+  ];
+  const partnerLabel = (k) => PARTNER_META.find((p) => p.key === k)?.label || k;
+  const partnerFin = PARTNER_META
+    .filter((m) => m.key !== "hisham" || hishamActive)
+    .map((m) => {
+      const earned = m.key === "hisham" ? globalHisham : m.key === "suhaib" ? globalSuhaib : globalMohammed;
+      const withdrawn = sumForPartner(partnerWithdrawals, m.key);
+      const dividends = sumForPartner(partnerDividends, m.key);
+      const dividendCount = partnerDividends.filter((d) => d.partnerName === m.key).length;
+      return { ...m, earned, withdrawn, dividends, dividendCount, available: earned - withdrawn };
+    });
 
   const budgetStats = budgets.map((b) => {
     const spent = (b.spending || []).reduce((a, s) => a + s.amount, 0);
@@ -505,7 +579,7 @@ export default function App() {
   const totalBudgetSpent = budgetStats.reduce((a, b) => a + b.spent, 0);
 
   // Owner distributions — money paid to ourselves (leaves the bank; not an operating cost).
-  const totalDistributions = suhaibWithdrawn + mohammedWithdrawn + totalDividendsPaid;
+  const totalDistributions = distributions();
 
   // All operating cash out (excludes owner distributions).
   const operatingOutflow = expensesPaid();
@@ -804,7 +878,7 @@ export default function App() {
     try {
       await dbAddPartnerWithdrawal(partnerName, amount, date, note);
       await refreshData();
-      toast.success(`Withdrawal of ${currency(amount)} recorded for ${partnerName === "suhaib" ? "Suhaib" : "Mohammed"}`);
+      toast.success(`Withdrawal of ${currency(amount)} recorded for ${partnerLabel(partnerName)}`);
       setModal(null);
     } catch (error) {
       toast.error(`Failed to record withdrawal: ${error.message}`);
@@ -1034,7 +1108,7 @@ export default function App() {
     try {
       await dbAddPartnerDividend(partnerName, amount, date, note);
       await refreshData();
-      toast.success(`Dividend of ${currency(amount)} paid to ${partnerName === "suhaib" ? "Suhaib" : "Mohammed"}`);
+      toast.success(`Dividend of ${currency(amount)} paid to ${partnerLabel(partnerName)}`);
       setModal(null);
     } catch (error) {
       toast.error(`Failed to record dividend: ${error.message}`);
@@ -1053,6 +1127,38 @@ export default function App() {
         setConfirm(null);
       } catch (error) {
         toast.error(`Failed to delete dividend: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }, true);
+  };
+
+  // --- Vesting: set/change/clear a partner's start date ---
+  const setVestingStart = async (partnerName, startDate) => {
+    if (!guardWrite()) return;
+    setLoading(true);
+    try {
+      await dbSetPartnerVestingStart(partnerName, startDate);
+      await refreshData();
+      toast.success(startDate ? `${partnerLabel(partnerName)}'s vesting starts ${formatDate(startDate)}` : `${partnerLabel(partnerName)}'s vesting start cleared`);
+      setModal(null);
+    } catch (error) {
+      toast.error(`Failed to update vesting: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearVestingStart = (partnerName) => {
+    showConfirm("Clear Start Date", `Remove ${partnerLabel(partnerName)}'s vesting start date? Vesting resets to "not started".`, "Clear", async () => {
+      setLoading(true);
+      try {
+        await dbSetPartnerVestingStart(partnerName, null);
+        await refreshData();
+        toast.success("Vesting start cleared");
+        setConfirm(null);
+      } catch (error) {
+        toast.error(`Failed: ${error.message}`);
       } finally {
         setLoading(false);
       }
@@ -1437,6 +1543,8 @@ export default function App() {
     { key: "recurring", label: "Recurring", icon: Repeat },
     { key: "payments", label: "Payments", icon: CalendarClock, count: paymentsBadgeCount },
     { key: "reports", label: "Reports", icon: FileBarChart },
+    { key: "vesting", label: "Vesting", icon: Hourglass },
+    { key: "networth", label: "Net Worth", icon: Gem },
     { key: "secretInvestment", label: "Secret Investment", icon: PiggyBank },
     ...(isAdmin ? [{ key: "admin", label: "Admin", icon: ShieldCheck }] : []),
   ];
@@ -1648,7 +1756,7 @@ export default function App() {
       if (e.action !== "UPDATE" || !e.oldData || !e.newData) return [];
       return Object.keys(e.newData).filter((k) => JSON.stringify(e.oldData[k]) !== JSON.stringify(e.newData[k]));
     };
-    const auditTables = ["", "projects", "payments", "expenses", "bank_spending", "secret_investment_spending", "secret_investment_transfers", "partner_withdrawals", "partner_dividends", "budgets", "budget_spending", "recurring_revenue", "recurring_expenses", "recurring_revenue_payments", "recurring_expense_payments", "domains", "payment_schedule", "payment_schedule_payments", "app_users"];
+    const auditTables = ["", "projects", "payments", "expenses", "bank_spending", "secret_investment_spending", "secret_investment_transfers", "partners", "partner_withdrawals", "partner_dividends", "budgets", "budget_spending", "recurring_revenue", "recurring_expenses", "recurring_revenue_payments", "recurring_expense_payments", "domains", "payment_schedule", "payment_schedule_payments", "app_users"];
 
     return (
       <div className="animate-fade-in-up space-y-6">
@@ -1930,24 +2038,21 @@ export default function App() {
           <StatCard icon={Percent} label="Margin" value={`${margin.toFixed(1)}%`} variant={margin >= 25 ? "income" : margin >= 0 ? "highlight" : "expense"} sub={`Net ${currency(netBefore)} of ${currency(revenue)}`} />
         </div>
 
-        {globalProjectProfit > 0 && (
+        {partnerFin.some((p) => p.earned > 0) && (
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="text-base">Founder Shares</CardTitle>
-              <CardDescription>Informational 10% each of project profit (Suhaib / Mohammed). All money sits in the bank until withdrawn.</CardDescription>
+              <CardDescription>Informational 10% each of company net profit (all income minus ALL spending, incl. bank &amp; budget spending). All money sits in the bank until withdrawn.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {[
-                  { label: "Suhaib (10%)", value: globalSuhaib, color: "bg-amber-500", bg: "bg-amber-50" },
-                  { label: "Mohammed (10%)", value: globalMohammed, color: "bg-violet-500", bg: "bg-violet-50" },
-                ].map((d) => (
-                  <div key={d.label} className={cn("rounded-xl p-4", d.bg)}>
+              <div className={cn("grid gap-3", partnerFin.length > 2 ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+                {partnerFin.map((d) => (
+                  <div key={d.key} className={cn("rounded-xl p-4", d.tile)}>
                     <div className="flex items-center gap-2 mb-2">
-                      <div className={cn("h-2 w-2 rounded-full", d.color)} />
-                      <span className="text-xs font-semibold text-muted-foreground">{d.label}</span>
+                      <div className={cn("h-2 w-2 rounded-full", d.dot)} />
+                      <span className="text-xs font-semibold text-muted-foreground">{d.label} (10%)</span>
                     </div>
-                    <p className="text-lg font-bold tabular-nums">{currency(d.value)}</p>
+                    <p className="text-lg font-bold tabular-nums">{currency(d.earned)}</p>
                   </div>
                 ))}
               </div>
@@ -1958,23 +2063,20 @@ export default function App() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base">Partner Balances</CardTitle>
-            <CardDescription>Each partner has two pots: their 10% share of project profit, and bank-funded dividend payouts</CardDescription>
+            <CardDescription>Each partner has two pots: their 10% share of company net profit, and bank-funded dividend payouts</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {[
-                { name: "Suhaib", partner: "suhaib", available: suhaibAvailable, earned: globalSuhaib, withdrawn: suhaibWithdrawn, dividends: suhaibDividendsTotal, variant: "partner1", icon: Users },
-                { name: "Mohammed", partner: "mohammed", available: mohammedAvailable, earned: globalMohammed, withdrawn: mohammedWithdrawn, dividends: mohammedDividendsTotal, variant: "partner2", icon: Users },
-              ].map((p) => (
-                <Card key={p.name} className={cn(p.variant === "partner1" ? "border-amber-200/60" : "border-violet-200/60")}>
+            <div className={cn("grid gap-4", partnerFin.length > 2 ? "sm:grid-cols-2 xl:grid-cols-3" : "sm:grid-cols-2")}>
+              {partnerFin.map((p) => (
+                <Card key={p.key} className={cn(p.cardBorder)}>
                   <CardContent className="p-5 space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", p.variant === "partner1" ? "bg-amber-100 text-amber-600" : "bg-violet-100 text-violet-600")}>
-                          <p.icon className="h-5 w-5" />
+                        <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", p.iconCls)}>
+                          <Users className="h-5 w-5" />
                         </div>
                         <div>
-                          <p className="font-semibold">{p.name}</p>
+                          <p className="font-semibold">{p.label}</p>
                           <p className="text-xs text-muted-foreground">Total received: {currency(p.withdrawn + p.dividends)}</p>
                         </div>
                       </div>
@@ -1985,13 +2087,13 @@ export default function App() {
                         <p className="text-base font-bold tabular-nums">{currency(p.available)}</p>
                         <p className="text-[11px] text-muted-foreground">Earned {currency(p.earned)} · Withdrawn {currency(p.withdrawn)}</p>
                         <Button size="sm" variant="outline" className="mt-2 w-full h-7 text-xs" disabled={p.available <= 0} onClick={() => setModal({
-                          title: `Withdraw Share — ${p.name}`,
+                          title: `Withdraw Share — ${p.label}`,
                           fields: [
                             { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
                             { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                             { name: "note", label: "Note", placeholder: "Withdrawal note (optional)" },
                           ],
-                          onSubmit: (v) => addPartnerWithdrawal(p.partner, parseFloat(v.amount), v.date, v.note),
+                          onSubmit: (v) => addPartnerWithdrawal(p.key, parseFloat(v.amount), v.date, v.note),
                         })}>
                           <Wallet className="mr-1.5 h-3 w-3" /> Withdraw Share
                         </Button>
@@ -2001,13 +2103,13 @@ export default function App() {
                         <p className="text-base font-bold tabular-nums text-emerald-700">{currency(p.dividends)}</p>
                         <p className="text-[11px] text-muted-foreground">Paid from the bank</p>
                         <Button size="sm" className="mt-2 w-full h-7 text-xs bg-emerald-600 hover:bg-emerald-700" disabled={bankBalance <= 0} onClick={() => setModal({
-                          title: `Pay Dividend — ${p.name}`,
+                          title: `Pay Dividend — ${p.label}`,
                           fields: [
                             { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
                             { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
                             { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
                           ],
-                          onSubmit: (v) => addPartnerDividend(p.partner, parseFloat(v.amount), v.date, v.note),
+                          onSubmit: (v) => addPartnerDividend(p.key, parseFloat(v.amount), v.date, v.note),
                         })}>
                           <BadgeDollarSign className="mr-1.5 h-3 w-3" /> Pay Dividend
                         </Button>
@@ -2046,7 +2148,7 @@ export default function App() {
                                 {row.kind === "dividend" ? "Dividend" : "Share"}
                               </Badge>
                             </TableCell>
-                            <TableCell className="font-medium">{row.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
+                            <TableCell className="font-medium">{partnerLabel(row.partnerName)}</TableCell>
                             <TableCell className="text-muted-foreground">{formatDate(row.date)}</TableCell>
                             <TableCell><Badge variant="destructive" className="tabular-nums font-semibold">{currency(row.amount)}</Badge></TableCell>
                             <TableCell className="text-muted-foreground">{row.note || "-"}</TableCell>
@@ -2318,7 +2420,7 @@ export default function App() {
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="text-base">Founder Shares</CardTitle>
-              <CardDescription>Informational 10% each of this project's profit. All profit sits in the bank until withdrawn.</CardDescription>
+              <CardDescription>Informational: 10% each of this project's own profit. Actual withdrawable balances use company-wide net profit (see Dashboard).</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -2684,37 +2786,29 @@ export default function App() {
         <Card>
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div><CardTitle className="text-base">Partner Dividends</CardTitle><CardDescription>Bank-funded payouts to Suhaib & Mohammed (the salary mechanism)</CardDescription></div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" disabled={bankBalance <= 0} onClick={() => setModal({
-                  title: "Pay Dividend — Suhaib",
-                  fields: [
-                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
-                    { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                    { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
-                  ],
-                  onSubmit: (v) => addPartnerDividend("suhaib", parseFloat(v.amount), v.date, v.note),
-                })}>
-                  <BadgeDollarSign className="mr-1.5 h-3.5 w-3.5" /> Pay Suhaib
-                </Button>
-                <Button size="sm" variant="outline" disabled={bankBalance <= 0} onClick={() => setModal({
-                  title: "Pay Dividend — Mohammed",
-                  fields: [
-                    { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
-                    { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
-                    { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
-                  ],
-                  onSubmit: (v) => addPartnerDividend("mohammed", parseFloat(v.amount), v.date, v.note),
-                })}>
-                  <BadgeDollarSign className="mr-1.5 h-3.5 w-3.5" /> Pay Mohammed
-                </Button>
+              <div><CardTitle className="text-base">Partner Dividends</CardTitle><CardDescription>Bank-funded payouts to the partners (the salary mechanism)</CardDescription></div>
+              <div className="flex gap-2 flex-wrap">
+                {partnerFin.map((p) => (
+                  <Button key={p.key} size="sm" variant="outline" disabled={bankBalance <= 0} onClick={() => setModal({
+                    title: `Pay Dividend — ${p.label}`,
+                    fields: [
+                      { name: "amount", label: "Amount (BHD)", type: "number", placeholder: "0.000", required: true },
+                      { name: "date", label: "Date", type: "date", default: new Date().toISOString().split("T")[0], required: true },
+                      { name: "note", label: "Note", placeholder: "Dividend note (optional)" },
+                    ],
+                    onSubmit: (v) => addPartnerDividend(p.key, parseFloat(v.amount), v.date, v.note),
+                  })}>
+                    <BadgeDollarSign className="mr-1.5 h-3.5 w-3.5" /> Pay {p.label}
+                  </Button>
+                ))}
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-3 sm:grid-cols-2 mb-4">
-              <div className="rounded-lg border p-3"><p className="text-[11px] uppercase font-semibold text-muted-foreground">Suhaib total dividends</p><p className="text-base font-bold tabular-nums">{currency(suhaibDividendsTotal)}</p><p className="text-xs text-muted-foreground">{suhaibDividends.length} payment{suhaibDividends.length !== 1 ? "s" : ""}</p></div>
-              <div className="rounded-lg border p-3"><p className="text-[11px] uppercase font-semibold text-muted-foreground">Mohammed total dividends</p><p className="text-base font-bold tabular-nums">{currency(mohammedDividendsTotal)}</p><p className="text-xs text-muted-foreground">{mohammedDividends.length} payment{mohammedDividends.length !== 1 ? "s" : ""}</p></div>
+            <div className={cn("grid gap-3 mb-4", partnerFin.length > 2 ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+              {partnerFin.map((p) => (
+                <div key={p.key} className="rounded-lg border p-3"><p className="text-[11px] uppercase font-semibold text-muted-foreground">{p.label} total dividends</p><p className="text-base font-bold tabular-nums">{currency(p.dividends)}</p><p className="text-xs text-muted-foreground">{p.dividendCount} payment{p.dividendCount !== 1 ? "s" : ""}</p></div>
+              ))}
             </div>
             {partnerDividends.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">No dividends paid yet. Use the buttons above to record one.</p>
@@ -2725,7 +2819,7 @@ export default function App() {
                   <TableBody>
                     {[...partnerDividends].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((d) => (
                       <TableRow key={d.id}>
-                        <TableCell className="font-medium">{d.partnerName === "suhaib" ? "Suhaib" : "Mohammed"}</TableCell>
+                        <TableCell className="font-medium">{partnerLabel(d.partnerName)}</TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(d.date)}</TableCell>
                         <TableCell><Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 tabular-nums font-semibold">{currency(d.amount)}</Badge></TableCell>
                         <TableCell className="text-muted-foreground">{d.note || "-"}</TableCell>
@@ -3866,6 +3960,206 @@ export default function App() {
     );
   }
 
+  // --- Vesting View ---
+  // 1/3 equity each, 4-year monthly vesting, 1-year cliff (25% at the cliff).
+  // Recomputed from today's date on every render, so progress updates daily.
+  function VestingView() {
+    const stateBadge = (vs) => {
+      if (vs.state === "unset") return { text: "Not started", cls: "bg-muted text-muted-foreground hover:bg-muted" };
+      if (vs.state === "future") return { text: "Starts soon", cls: "bg-indigo-100 text-indigo-700 hover:bg-indigo-100" };
+      if (vs.state === "cliff") return { text: "Cliff period", cls: "bg-amber-100 text-amber-700 hover:bg-amber-100" };
+      if (vs.state === "done") return { text: "Fully vested", cls: "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" };
+      return { text: "Vesting", cls: "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" };
+    };
+    const startModal = (m, existing) => setModal({
+      title: `${existing ? "Change" : "Set"} Start Date — ${m.label}`,
+      fields: [{ name: "startDate", label: "Vesting start date", type: "date", default: existing || new Date().toISOString().split("T")[0], required: true }],
+      onSubmit: (v) => setVestingStart(m.key, v.startDate),
+    });
+
+    return (
+      <div className="animate-fade-in-up space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Vesting</h1>
+          <p className="text-sm text-muted-foreground">Each partner vests 1/3 of the company over 4 years, month by month, with a 1-year cliff: nothing until 12 months, then 25% unlocks at once and the rest vests monthly. Updates daily.</p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {PARTNER_META.map((m) => {
+            const start = partnerStartOf(m.key);
+            const vs = vestingStatus(start);
+            const badge = stateBadge(vs);
+            const vestedPct = vs.fraction * 100;
+            const vestedEquityPct = vs.fraction * EQUITY_PER_PARTNER * 100;
+            const inProgressEquityPct = (1 - vs.fraction) * EQUITY_PER_PARTNER * 100;
+            return (
+              <Card key={m.key} className={cn(m.cardBorder)}>
+                <CardContent className="p-5 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", m.iconCls)}>
+                        <Users className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="font-semibold">{m.label}</p>
+                        <p className="text-xs text-muted-foreground">{(EQUITY_PER_PARTNER * 100).toFixed(2)}% equity</p>
+                      </div>
+                    </div>
+                    <Badge className={cn(badge.cls)}>{badge.text}</Badge>
+                  </div>
+
+                  {!start ? (
+                    <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        Vesting hasn't started yet.
+                        {m.key === "hisham" && <span className="block mt-1 text-xs">Setting a start date also makes Hisham a 10% profit partner from that date.</span>}
+                      </p>
+                      <Button size="sm" onClick={() => startModal(m, null)}>
+                        <Hourglass className="mr-1.5 h-3.5 w-3.5" /> Start Vesting
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
+                          <span>Vested</span>
+                          <span className="font-semibold">{vestedPct.toFixed(1)}% · {vs.months}/{VEST_TOTAL_MONTHS} mo</span>
+                        </div>
+                        <Progress value={vestedPct} className="h-2" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-lg border p-3 bg-emerald-50/40 border-emerald-200/60">
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Done vesting</p>
+                          <p className="text-base font-bold tabular-nums text-emerald-700">{vestedEquityPct.toFixed(2)}%</p>
+                          <p className="text-[11px] text-muted-foreground">of the company</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">In progress</p>
+                          <p className="text-base font-bold tabular-nums">{inProgressEquityPct.toFixed(2)}%</p>
+                          <p className="text-[11px] text-muted-foreground">still to vest</p>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5 text-xs">
+                        {[
+                          { label: "Started", value: formatDate(start) },
+                          { label: "Cliff (25% unlocks)", value: formatDate(vs.cliffDate) },
+                          { label: "Next vest", value: vs.nextVestDate ? formatDate(vs.nextVestDate) : "Complete" },
+                          { label: "Fully vested", value: formatDate(vs.fullDate) },
+                        ].map((r) => (
+                          <div key={r.label} className="flex items-center justify-between">
+                            <span className="text-muted-foreground">{r.label}</span>
+                            <span className="font-medium tabular-nums">{r.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" className="flex-1 h-8" onClick={() => startModal(m, start)}>
+                          <Pencil className="mr-1.5 h-3 w-3" /> Change date
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-8 text-muted-foreground hover:text-red-600" onClick={() => clearVestingStart(m.key)}>
+                          <Trash2 className="mr-1.5 h-3 w-3" /> Clear
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">How the schedule works</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>Months 0-11: cliff period, nothing is vested yet.</p>
+            <p>Month 12 (cliff complete): 25% of the partner's equity vests at once.</p>
+            <p>Months 13-48: 1/48 of the equity vests each month until fully vested at 4 years.</p>
+            <p>Hisham's start date can be set later; from that date he also starts earning a 10% profit share like the other partners (only on profit made after his start).</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // --- Net Worth View ---
+  // Company valuation = revenue of the last 365 days x 10. If we have less than a year of
+  // history, annualize first (e.g. 3 months of revenue x4), per the agreed method.
+  function NetWorthView() {
+    const now = new Date();
+    const cutoff = toISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 365));
+    const revLast365 = incomeReceived((d) => typeof d === "string" && d >= cutoff);
+    const revDates = [...allContractPayments.map((x) => x.date), ...recurringRevenuePayments.map((x) => x.periodDate)].filter(Boolean).sort();
+    const firstRev = revDates[0] || null;
+    const daysOfData = firstRev && firstRev > cutoff ? Math.max(1, -daysUntil(firstRev) + 1) : 365;
+    const annualized = revLast365 * (365 / daysOfData);
+    const valuation = annualized * 10;
+    const maxPerPartner = valuation * EQUITY_PER_PARTNER;
+
+    return (
+      <div className="animate-fade-in-up space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Net Worth</h1>
+          <p className="text-sm text-muted-foreground">Company valuation = last 365 days of revenue (annualized while we're younger than a year) x 10. Each partner's net worth = their vested share of that valuation.</p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard label="Revenue (last 365d)" value={currency(revLast365)} variant="income" sub={daysOfData < 365 ? `${daysOfData} days of history` : "Full year of history"} />
+          <StatCard label="Annualized Revenue" value={currency(annualized)} variant="highlight" sub={daysOfData < 365 ? `x ${(365 / daysOfData).toFixed(1)} to fill the year` : "No scaling needed"} />
+          <StatCard label="Company Valuation" value={currency(valuation)} variant="bank" sub="10x annualized revenue" />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {PARTNER_META.map((m) => {
+            const start = partnerStartOf(m.key);
+            const vs = vestingStatus(start);
+            const current = maxPerPartner * vs.fraction;
+            return (
+              <Card key={m.key} className={cn(m.cardBorder)}>
+                <CardContent className="p-5 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", m.iconCls)}>
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="font-semibold">{m.label}</p>
+                      <p className="text-xs text-muted-foreground">{(EQUITY_PER_PARTNER * 100).toFixed(2)}% equity · {(vs.fraction * 100).toFixed(1)}% vested</p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Current net worth (vested)</p>
+                    <p className="text-2xl font-bold tabular-nums tracking-tight">{currency(current)}</p>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
+                      <span>Toward maximum</span>
+                      <span className="font-semibold">{(vs.fraction * 100).toFixed(1)}%</span>
+                    </div>
+                    <Progress value={vs.fraction * 100} className="h-2" />
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <span className="text-xs text-muted-foreground">Maximum (fully vested)</span>
+                    <span className="text-sm font-bold tabular-nums">{currency(maxPerPartner)}</span>
+                  </div>
+                  {!start && <p className="text-xs text-muted-foreground">Vesting not started: set a start date on the Vesting page.</p>}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">How this is calculated</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>1. Take all revenue received in the last 365 days: {currency(revLast365)}.</p>
+            <p>2. If the business is younger than a year, scale it to a full year ({daysOfData} days x {(365 / daysOfData).toFixed(2)}): {currency(annualized)}.</p>
+            <p>3. Multiply by 10 for the company valuation: {currency(valuation)}.</p>
+            <p>4. Each partner's maximum is 1/3 of that; their current net worth is the vested portion (see Vesting page).</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   // --- Reports View ---
   function ReportsView() {
     const filterByMonth = (dateStr) => dateStr && dateStr.startsWith(reportMonth);
@@ -3911,9 +4205,10 @@ export default function App() {
         <Card>
           <CardHeader className="pb-4"><CardTitle className="text-base">Partner Summary</CardTitle><CardDescription>All-time earnings, share withdrawals, and bank dividends</CardDescription></CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <StatCard icon={Users} label="Suhaib" value={currency(suhaibAvailable)} variant="partner1" sub={`Earned ${currency(globalSuhaib)} · Withdrawn ${currency(suhaibWithdrawn)} · Dividends ${currency(suhaibDividendsTotal)}`} />
-              <StatCard icon={Users} label="Mohammed" value={currency(mohammedAvailable)} variant="partner2" sub={`Earned ${currency(globalMohammed)} · Withdrawn ${currency(mohammedWithdrawn)} · Dividends ${currency(mohammedDividendsTotal)}`} />
+            <div className={cn("grid gap-4", partnerFin.length > 2 ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+              {partnerFin.map((p) => (
+                <StatCard key={p.key} icon={Users} label={p.label} value={currency(p.available)} variant={p.statVariant} sub={`Earned ${currency(p.earned)} · Withdrawn ${currency(p.withdrawn)} · Dividends ${currency(p.dividends)}`} />
+              ))}
             </div>
           </CardContent>
         </Card>
@@ -4113,6 +4408,8 @@ export default function App() {
           {view === "recurring" && <RecurringView />}
           {view === "payments" && <PaymentsView />}
           {view === "reports" && <ReportsView />}
+          {view === "vesting" && <VestingView />}
+          {view === "networth" && <NetWorthView />}
           {view === "secretInvestment" && <SecretInvestmentView />}
         </div>
       </main>

@@ -40,6 +40,7 @@ supabase/
     ├── 20260510000000_dividends_domains_expiries.sql .. partner_dividends, domains, end_date columns
     ├── 20260615000000_payment_schedule.sql .. payment_schedule + payment_schedule_payments (tracking layer) + sample seed
     └── 20260701000000_secret_investment_yearly.sql .. secret_investment_transfers (yearly 25% set-aside) + RBAC/audit; recurring_*_payments.project_id nullable (general recurring markable); payment_schedule_payments.amount (frozen per-occurrence)
+    └── 20260721000000_partners_vesting.sql .. partners table (vesting_start per partner, seeded suhaib/mohammed/hisham) + RBAC/audit; widens partner_name CHECKs to include 'hisham'
 
 cloudflare/
 ├── keep-alive/
@@ -65,8 +66,9 @@ Tables:
 - `bank_spending` — general spending from the bank
 - `secret_investment_spending` — **DEPRECATED** (old pot model). No longer used by the UI; kept for audit history.
 - `secret_investment_transfers` — yearly secret-investment set-aside: `year` (UNIQUE), `amount`, `moved_date`, `note`. One "moved" row per year; reduces the bank.
-- `partner_withdrawals` — share-based withdrawals (drawn against the partner's accumulated 10% share); CHECK on partner_name ('suhaib'/'mohammed')
-- `partner_dividends` — bank-funded dividend payouts (the salary mechanism); CHECK on partner_name
+- `partners` — the 3 fixed partners (suhaib/mohammed/hisham) with nullable `vesting_start` DATE. Seeded rows with ids `partner_<name>`. Drives the Vesting/Net Worth pages and Hisham's activation as a 10% profit partner.
+- `partner_withdrawals` — share-based withdrawals (drawn against the partner's accumulated 10% share); CHECK on partner_name ('suhaib'/'mohammed'/'hisham')
+- `partner_dividends` — bank-funded dividend payouts (the salary mechanism); CHECK on partner_name (same 3)
 - `budgets` — budget categories with name, allocated_amount, description
 - `budget_spending` — spending against budgets (FK to budgets, CASCADE delete)
 - `recurring_revenue` — recurring revenue items (nullable project_id, frequency: monthly/yearly, active, optional `end_date` for expiry alerts)
@@ -125,7 +127,7 @@ Per-project profit uses only cash actually received/paid.
 - **totalRevenue** = contractPayments + projRecurringPaid
 - **totalExpenses** = project `expenses` + projRecurringExpPaid
 - **profit** = totalRevenue − totalExpenses
-- **Founder shares** (only when profit > 0): `suhaibShare` = `mohammedShare` = profit × 0.10 (informational display only; there is NO 55% bank pot or 25% per-project secret share anymore)
+- **Per-project founder shares** (only when profit > 0): `suhaibShare` = `mohammedShare` = profit × 0.10. **Informational per-project display ONLY** — actual withdrawable balances do NOT use these (see Partner Compensation).
 - **unpaid** = max(0, totalValue − contractPayments). Free projects (`totalValue = 0`) show "Free". Status badge tracks contract only.
 - **isPaid** = unpaid <= 0
 
@@ -134,9 +136,13 @@ Per-project profit uses only cash actually received/paid.
 - Received recurring revenue and paid recurring expenses flow into the cash-basis bank like any other dated income/expense. No flat `active × amount` projection is used in money math (that only appears as informational "Year Potential").
 
 ### Partner Compensation
-1. **10% Share** (informational, project profit only) — accumulates per project, drawn down via `partner_withdrawals`. Available = earned − withdrawn.
+1. **10% Share** — earned = `max(0, incomeReceived − expensesPaid) × 0.10` on COMPANY-WIDE cash (so bank spending + budget spending reduce shares — fixed 2026-07-21; 250 in + 250 bank-spent = 0 share). Drawn down via `partner_withdrawals`; Available = earned − withdrawn. **Hisham** earns 10% too, but only on income/spending dated ≥ his `partners.vesting_start` and only once that date is set and ≤ today (`hishamActive`).
 2. **Bank Dividends** — payouts recorded in `partner_dividends`, drawn from the bank (capped by `bankBalance`). The salary mechanism.
-Both reduce the bank when recorded.
+Both reduce the bank when recorded. All partner-facing UI maps over `partnerFin` (built from `PARTNER_META`; Hisham appears once active).
+
+### Vesting & Net Worth (pages, display-only — no money math)
+- **Vesting**: 1/3 equity each, 4-year (48 mo) monthly vesting, 1-year cliff = 25% at once, then 1/48/month. Pure functions `monthsSince`/`vestingStatus(startStr)` in App.jsx compute from today's date each render (auto-updates daily). Start date set/changed/cleared per partner on the Vesting page → `partners.vesting_start` (`setPartnerVestingStart`). Setting Hisham's start also activates his 10% profit share.
+- **Net Worth**: company valuation = revenue of last 365 days, annualized if history < 1 year (`rev × 365/daysOfData`, e.g. 3 months → ×4), × 10. Per partner: max = valuation/3, current = max × vestedFraction.
 
 ### Secret Investment (yearly, 25% — after payouts)
 - **netProfitForYear(Y)** = incomeReceived(in Y) − expensesPaid(in Y) — net profit BEFORE paying ourselves (drives the Dashboard Net Profit + margin).
@@ -180,7 +186,7 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 
 ### Roles, Audit & Admin (multi-user)
 - **Roles**: `app_users` (email → `reader`|`full`, status). `revenueautomationlab@gmail.com` is hard-coded to `admin` in `app_user_role()` (never lockable-out). Helpers `app_can_read()` / `app_can_write()` / `app_is_admin()`. **Role-aware RLS + audit on all data tables** (now 17, incl. `secret_investment_transfers`; reader = SELECT only; full = read/write/delete; admin = all). `service_role` (workers) bypasses RLS.
-- **TODO (backup/restore gap):** `db_snapshots` + `restore_snapshot()` still cover the original 16 business tables — `secret_investment_transfers` is not yet backed up/restored (it survives a restore untouched). Add it to the snapshot list + `restore_snapshot` RPC when convenient.
+- **TODO (backup/restore gap):** `db_snapshots` + `restore_snapshot()` still cover the original 16 business tables — `secret_investment_transfers` and `partners` are not yet backed up/restored (they survive a restore untouched). Add them to the snapshot list + `restore_snapshot` RPC when convenient.
 - **Auth**: `AuthContext.resolveAccess()` allows the admin + any active onboarded Gmail; exposes `role`/`isAdmin`/`canWrite`. Non-onboarded accounts are force-signed-out. UI write guard `guardWrite()` (RLS is the real enforcement).
 - **Audit log**: `audit_log` + AFTER row triggers (`audit_trigger`, SECURITY DEFINER) on every data table → old/new JSONB + actor email + timestamp. Admin-only SELECT; admin UPDATE only sets `reverted_at`. Per-change revert via `applyAuditRevert()` (INSERT→delete, DELETE→re-insert, UPDATE→restore old; the revert is itself audited).
 - **Admin page** (`AdminView`, admin-only nav): Users & Roles (onboard sends an invite email), Audit Log (filter + per-change Revert), Backups (list snapshots, Back up now, Export JSON, OTP-gated Restore).
@@ -207,8 +213,10 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 5. **Budgets** — Budget cards with progress bars, spending tracking, CRUD
 6. **Recurring** — Revenue + expenses tables with frequency, project, end-date column (yellow when within reminder threshold), active/pause, full CRUD. Add-revenue modal supports optional inline domain creation.
 7. **Payments** — Tracking-only payment todos (does not affect money). Header note states this. Stat cards (Due This Week / Overdue / Outgoing ≤30d / Incoming ≤30d). Sub-tabs: **Upcoming** (timeline grouped Overdue / This week / Next 30 days / Later — next unpaid occurrence per active item + domain renewals, with Mark-paid / Renew), **Outgoing** + **Incoming** (management lists: next due, status, ✓N paid, edit/close-reopen/delete, expandable per-occurrence history toggle), **Domains** (the folded-in `<DomainsView embedded />` — full domain CRUD). Sidebar nav shows a badge of items due ≤14 days.
-8. **Reports** — Monthly P&L (contract + recurring revenue), Partner Summary (earned/withdrawn/dividends), Budget Utilization, Recurring Obligations, Cash Flow Summary (with dividends + recurring lines), Project Performance
-9. **Secret Investment** — Yearly browser (prev/current/future year selector). Per year: net profit, 25% due, Moved/Pending status, "Mark as moved" (writes a `secret_investment_transfers` row → reduces bank), and a transfer-history table across years.
+8. **Reports** — Monthly P&L (contract + recurring revenue), Partner Summary (earned/withdrawn/dividends, all partners), Budget Utilization, Recurring Obligations, Cash Flow Summary (with dividends + recurring lines), Project Performance
+9. **Vesting** — per-partner vesting cards (set/change/clear start date, cliff/vesting/done status, progress bar, done vs in-progress equity, cliff/next/full dates) + schedule explainer
+10. **Net Worth** — valuation cards (last-365d revenue, annualized, 10x valuation) + per-partner current (vested) vs maximum net worth + calculation explainer
+11. **Secret Investment** — Yearly browser (prev/current/future year selector). Per year: net profit, 25% due, Moved/Pending status, "Mark as moved" (writes a `secret_investment_transfers` row → reduces bank), and a transfer-history table across years.
 
 ## Key Patterns
 - Single-file App.jsx with nested function components
