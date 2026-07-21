@@ -4088,9 +4088,18 @@ export default function App() {
     const now = new Date();
     const cutoff = toISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 365));
     const revLast365 = incomeReceived((d) => typeof d === "string" && d >= cutoff);
-    const revDates = [...allContractPayments.map((x) => x.date), ...recurringRevenuePayments.map((x) => x.periodDate)].filter(Boolean).sort();
-    const firstRev = revDates[0] || null;
-    const daysOfData = firstRev && firstRev > cutoff ? Math.max(1, -daysUntil(firstRev) + 1) : 365;
+    // Business age anchors on the FIRST money activity of any kind (income or spending),
+    // e.g. first payment 27 Feb 2026 -> 145 days -> x2.5 to fill the year.
+    const activityDates = [
+      ...allContractPayments.map((x) => x.date),
+      ...recurringRevenuePayments.map((x) => x.periodDate),
+      ...allProjectExpenses.map((x) => x.date),
+      ...recurringExpensePayments.map((x) => x.periodDate),
+      ...bankSpending.map((x) => x.date),
+      ...allBudgetSpending.map((x) => x.date),
+    ].filter(Boolean).sort();
+    const firstActivity = activityDates[0] || null;
+    const daysOfData = firstActivity && firstActivity > cutoff ? Math.max(1, -daysUntil(firstActivity) + 1) : 365;
     const annualized = revLast365 * (365 / daysOfData);
     const valuation = annualized * 10;
     const maxPerPartner = valuation * EQUITY_PER_PARTNER;
@@ -4103,7 +4112,7 @@ export default function App() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <StatCard label="Revenue (last 365d)" value={currency(revLast365)} variant="income" sub={daysOfData < 365 ? `${daysOfData} days of history` : "Full year of history"} />
+          <StatCard label="Revenue (last 365d)" value={currency(revLast365)} variant="income" sub={daysOfData < 365 ? `${daysOfData} days since ${formatDate(firstActivity)}` : "Full year of history"} />
           <StatCard label="Annualized Revenue" value={currency(annualized)} variant="highlight" sub={daysOfData < 365 ? `x ${(365 / daysOfData).toFixed(1)} to fill the year` : "No scaling needed"} />
           <StatCard label="Company Valuation" value={currency(valuation)} variant="bank" sub="10x annualized revenue" />
         </div>
@@ -4151,7 +4160,7 @@ export default function App() {
           <CardHeader className="pb-3"><CardTitle className="text-base">How this is calculated</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>1. Take all revenue received in the last 365 days: {currency(revLast365)}.</p>
-            <p>2. If the business is younger than a year, scale it to a full year ({daysOfData} days x {(365 / daysOfData).toFixed(2)}): {currency(annualized)}.</p>
+            <p>2. The business clock starts at the first recorded money activity{firstActivity ? ` (${formatDate(firstActivity)})` : ""}. While younger than a year, scale to a full year ({daysOfData} days x {(365 / daysOfData).toFixed(2)}): {currency(annualized)}.</p>
             <p>3. Multiply by 10 for the company valuation: {currency(valuation)}.</p>
             <p>4. Each partner's maximum is 1/3 of that; their current net worth is the vested portion (see Vesting page).</p>
           </CardContent>
