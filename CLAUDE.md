@@ -238,7 +238,6 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 - `.env.development` contains Supabase credentials (gitignored) — same Supabase project for local and production
 - AuthCallbackPage explicitly exchanges session on mount (checks URL hash/code params)
 - **DEV auth bypass (local testing only):** set `VITE_AUTH_BYPASS=true` in `.env.development` to skip Google OAuth and load a fake admin + mock data (`AuthContext.DEV_AUTH_BYPASS`, `supabaseService.mockState()`). Gated on `import.meta.env.DEV`, so the production `vite build` strips it entirely — it can never ship live. Writes won't persist (no real session); it's for UI/layout verification (e.g. Playwright at mobile widths).
-- **UAT with real data:** `python scripts/dev-snapshot.py` (read-only, uses daily-brief `.dev.vars` service key) writes gitignored `dev-snapshot.json`; bypass mode then loads it instead of the mock.
 
 ## MCP Tools Setup
 - **Playwright MCP**: Browser automation and testing — installed globally via `@anthropic-ai/claude-code` with `@anthropic-ai/mcp-server-playwright` package
