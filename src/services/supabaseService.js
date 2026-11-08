@@ -20,7 +20,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Export supabase instance for use in other modules (like AuthContext)
 export { supabase };
-const supabaseClient = supabase;
 // DEV-ONLY: mock data for local layout/UI testing when auth is bypassed (see AuthContext).
 // Guarded by import.meta.env.DEV so the production build strips it entirely.
 const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
@@ -67,17 +66,8 @@ function mockState() {
   };
 }
 
-// DEV-ONLY (UAT): if a local real-data snapshot exists (dev-snapshot.json, gitignored,
-// made by scripts/dev-snapshot.py), bypass mode reads it instead of the mock. Read-only.
-const DEV_SNAPSHOT = DEV_AUTH_BYPASS
-  ? Object.values(import.meta.glob("../../dev-snapshot.json", { eager: true, import: "default" }))[0]
-  : null;
-
 export async function fetchState() {
-  if (DEV_AUTH_BYPASS && !DEV_SNAPSHOT) return mockState();
-  const supabase = DEV_SNAPSHOT
-    ? { from: (t) => ({ select: async () => ({ data: DEV_SNAPSHOT[t] || [] }) }) }
-    : supabaseClient;
+  if (DEV_AUTH_BYPASS) return mockState();
   try {
     const [
       { data: projects },

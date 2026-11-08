@@ -4401,7 +4401,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mx-auto max-w-[1400px] p-4 sm:p-6 md:px-10 md:py-8 lg:px-14 lg:py-10">
+        <div className="mx-auto max-w-[1400px] p-4 sm:p-6 lg:p-8">
           {!canWrite && (
             <div className="mb-5 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
               <Lock className="h-4 w-4 shrink-0" /> <span><b>Read-only access.</b> You can view everything but can't add, edit or delete. Ask the admin for full access.</span>

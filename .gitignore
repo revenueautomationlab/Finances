@@ -19,6 +19,3 @@ supabase/.branches
 # Local Claude Code agent settings (per-machine, not project)
 .claude/
 .playwright-mcp/
-
-# local UAT real-data snapshot (never commit)
-dev-snapshot.json
