@@ -12,27 +12,8 @@ const AuthContext = createContext(null);
 export const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-const GSI_SRC = "https://accounts.google.com/gsi/client";
 const NONCE_KEY = "ral_finance_oauth_nonce";
 const DENIED = "Access denied. Ask the admin to add your Google account.";
-
-// Load Google Identity Services once.
-let gsiPromise = null;
-function loadGsi() {
-  if (window.google?.accounts?.id) return Promise.resolve(window.google);
-  if (!gsiPromise) {
-    gsiPromise = new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = GSI_SRC;
-      s.async = true;
-      s.defer = true;
-      s.onload = () => (window.google?.accounts?.id ? resolve(window.google) : reject(new Error("Google sign-in failed to load")));
-      s.onerror = () => { gsiPromise = null; reject(new Error("Google sign-in failed to load")); };
-      document.head.appendChild(s);
-    });
-  }
-  return gsiPromise;
-}
 
 function randomNonce() {
   const a = new Uint8Array(16);
@@ -41,8 +22,7 @@ function randomNonce() {
 }
 
 /**
- * Fallback when the GIS prompt cannot be shown (cooldown after a dismissal, third-party sign-in
- * blocked, etc.): full-page Google OAuth with response_type=id_token, back to /auth/callback,
+ * Google sign-in: full-page Google OAuth with response_type=id_token, back to /auth/callback,
  * where AuthCallbackPage hands the ID token to completeSignIn. Needs the callback URL listed as
  * an authorized redirect URI on the OAuth client.
  */
@@ -163,27 +143,9 @@ export function AuthProvider({ children }) {
       setError("Google sign-in is not configured (VITE_GOOGLE_CLIENT_ID missing).");
       return;
     }
-    try {
-      const google = await loadGsi();
-      google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (resp) => { if (resp?.credential) completeSignIn(resp.credential); },
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        use_fedcm_for_prompt: true,
-      });
-      google.accounts.id.prompt((n) => {
-        // Prompt could not be shown (cooldown, blocked): fall back to the redirect flow.
-        // A user who closed it on purpose is left on the login page.
-        try {
-          const reason = n.isSkippedMoment?.() ? n.getSkippedReason?.() : null;
-          if (n.isNotDisplayed?.() || (reason && reason !== "user_cancel" && reason !== "tap_outside")) redirectToGoogle();
-        } catch { /* FedCM may not expose moment details */ }
-      });
-    } catch (err) {
-      console.error("Google sign-in unavailable, using redirect:", err);
-      redirectToGoogle();
-    }
+    // ponytail: always redirect. The One Tap/FedCM prompt silently did nothing when the
+    // browser was in cooldown or not signed in to Google, and hid the reason from us.
+    redirectToGoogle();
   };
 
   const signOut = async () => {
