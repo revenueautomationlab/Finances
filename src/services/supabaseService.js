@@ -443,28 +443,14 @@ export async function applyAuditRevert(entry) {
   await api(`/admin/audit/${enc(entry.id)}/revert`, { method: "POST", body: {} });
 }
 
-// Admin worker actions that send email or call Resend (invite email, restore OTP, Resend usage). The Cloudflare
-// worker verifies the caller's API JWT against GET /auth/me and checks role=admin.
-const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
-async function adminAction(action, body) {
-  const token = getToken();
-  if (!isTokenValid(token)) throw unauthorized("Session expired, please sign in again");
-  const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.ok) throw new Error(json.error || `Request failed (${res.status})`);
-  return json;
-}
-export const inviteUser = (email, role) => adminAction("invite", { email, role });
-export const requestRestoreOtp = () => adminAction("otp", {});
+// Invite email, restore code and Resend usage are served by the API (the old Cloudflare Worker is retired).
+export const inviteUser = (email, role) => api("/admin/invite", { method: "POST", body: { email, role } });
+export const requestRestoreOtp = () => api("/admin/otp", { method: "POST", body: {} });
 // Snapshots and restore run in the API against the live VPS DB. Restore checks the emailed code,
 // takes a safety snapshot and restores, all in one transaction.
 export const restoreSnapshot = (snapshotId, code) => api(`/admin/snapshots/${enc(snapshotId)}/restore`, { method: "POST", body: { code } });
 export const takeSnapshotNow = () => api("/admin/snapshots", { method: "POST", body: {} });
-export const fetchResendUsage = () => adminAction("resend-usage", {});
+export const fetchResendUsage = () => api("/admin/email-usage");
 
 export async function fetchSnapshots() {
   const data = await api("/admin/snapshots");

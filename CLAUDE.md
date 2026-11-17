@@ -43,15 +43,10 @@ supabase/
     └── 20260721000000_partners_vesting.sql .. partners table (vesting_start per partner, seeded suhaib/mohammed/hisham) + RBAC/audit; widens partner_name CHECKs to include 'hisham'
 
 cloudflare/
-├── keep-alive/
-│   ├── wrangler.toml .............. Worker config — cron `0 8 * * *` (daily 08:00 UTC), [vars] hold public Supabase URL + anon key
-│   └── src/
-│       └── index.js ............... Worker that pings Supabase `/rest/v1/projects` daily (real DB query — counts as activity), falls back to `/auth/v1/health`, to prevent free-tier pausing
-└── daily-brief/
-    ├── wrangler.toml .............. Worker config — cron `0 5 * * *` (08:00 Asia/Bahrain), [vars] hold Supabase URL + MAIL_FROM/TO/CC
-    ├── README.md ................. Setup: Resend domain verification + `wrangler secret put` steps + manual test URL
+└── keep-alive/
+    ├── wrangler.toml .............. Worker config — cron `0 8 * * *` (daily 08:00 UTC), [vars] hold public Supabase URL + anon key
     └── src/
-        └── index.js ............... Daily brief email: reads DB via service_role, sends ONE mobile-responsive email via Resend — payments due tomorrow + this week, yesterday's transactions, KPI snapshot
+          └── index.js ............... Worker that pings Supabase `/rest/v1/projects` daily (real DB query — counts as activity), falls back to `/auth/v1/health`, to prevent free-tier pausing
 
 .github/
 └── workflows/
@@ -87,10 +82,10 @@ All tables have:
 - **Live DB = the RAL VPS** (`72.62.16.1`), stack in `/opt/ral-finance/`: `ral-finance-db` (postgres:16-alpine, DB `finance`) + `ral-finance-api` (`server/server.js`, Node) behind Traefik at **https://finance-api.raltech.dev** (grey-cloud A record, Let's Encrypt TLS-ALPN cert, `/healthz`).
 - **SPA** (finance.raltech.dev, Cloudflare Pages project `ral-finance`, git-connected: a push to `main` runs `npm run build` and deploys) calls the API via `VITE_API_URL`. Pages Production env vars `VITE_API_URL` and `VITE_GOOGLE_CLIENT_ID` were set through the Cloudflare API (account `e403f22187e5205e7168efc70a31f4a3`). Rollback = Cloudflare dashboard > ral-finance > Deployments > previous build > Rollback.
 - **Auth:** Google Identity Services ID token -> `POST /auth/google` -> API HS256 JWT (12 h) in localStorage `ral_finance_api_token`; roles from `app_users`. Google client lives in GCP project "RAL Finance App" (JS origins finance.raltech.dev + localhost:5173, redirect `/auth/callback`).
-- **Daily-brief Worker** reads and writes only via the API: var `FINANCE_API_URL`, secret `FINANCE_API_TOKEN` (HS256 JWT `{svc:true}`, valid 1 year, minted with the API `JWT_SECRET`; re-mint before 2027-11-17). Manual preview: `/?token=<TRIGGER_TOKEN>` (`&send=1` mails MAIL_TO + MAIL_CC).
+- **Email (API):** the API sends the restore code (`POST /admin/otp`, to the owner) and invite emails (`POST /admin/invite`) via Resend, and serves live Resend usage (`GET /admin/email-usage`). Env `RESEND_API_KEY` (server `.env`). It also takes the daily `cron` snapshot in-process at 05:00 UTC. The daily-brief Worker and its `svc` service token were removed 2026-11-17.
 - **Deploy API:** `python server/deploy/deploy.py deploy` (copies server/ and restarts only `ral-finance-api`). Ad hoc: `deploy.py run '<cmd>'`, `deploy.py put <local> <remote>` (in Git Bash set `MSYS_NO_PATHCONV=1`, or remote paths get mangled). Schema changes: apply SQL to the VPS DB (`docker exec -i ral-finance-db psql -U postgres -d finance`) and keep `server/db/schema.sql` in sync.
 - **Backups:** `/opt/ral-finance/backup.sh` nightly 03:45 (cron) with a restore check, dumps in `/opt/ral-finance/backups/`; in-app `db_snapshots` (last 30, cron + on demand, OTP-gated restore).
-- **Creds:** `.vps-creds` (gitignored: VPS SSH, JWT_SECRET, DB password, GOOGLE_CLIENT_ID, TRIGGER_TOKEN), VPS `/opt/ral-finance/.env`, GitHub secrets `VPS_*`. Never print them.
+- **Creds:** `.vps-creds` (gitignored: VPS SSH, JWT_SECRET, DB password, GOOGLE_CLIENT_ID, RESEND_API_KEY), VPS `/opt/ral-finance/.env`, GitHub secrets `VPS_*`. Never print them.
 - **Supabase = cold rollback only** (project `mssxrafomjlzoypjvjdu`, frozen at the 2026-11-17 final sync, 23/23 tables matched). The `keep-alive` Worker still pings it so it does not pause, and `backup.yml` still dumps it. Reload path: `gh workflow run "Backup Database"` -> download artifact -> `python server/db/build_sql.py <dir> server/db/out` -> put to `/opt/ral-finance/incoming/` -> `bash load.sh` (destructive for the VPS DB, back it up first).
 - Off-site copies of the 2026-11-17 dump: `C:\Users\Suhaib\Desktop\RAL\backups\finance-db\` and `/root/backups/finance-db/`.
 
@@ -197,9 +192,6 @@ A todo/reminder layer for incoming & outgoing obligations (domains, CR, VPS, App
 - **Domains** are folded into the Payments tab as a category, read from the `domains` table (renewal due = `expiry_date`); "Renew" bumps `expiry_date` +1 year. Domain expiry still drives `expiryAlerts` independently.
 - **Memos**: `paidPeriodsByScheduleItem` (Set per item), `paymentTimeline` (next unpaid occurrence per active item + domain renewals, sorted by date), `paymentsBadgeCount` (entries due ≤14 days — the sidebar badge).
 
-### Daily Brief Email (cloudflare/daily-brief)
-Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the **service_role** key (bypasses RLS) and sends ONE mobile-responsive HTML email via **Resend** to `revenueautomationlab@gmail.com`, cc `saeedalsaeedbusiness@gmail.com` + `suhaibrajabo@gmail.com`. Contents: payments **due tomorrow** (the reminder) + overdue + rest-of-week, **yesterday's transactions**, and a **KPI snapshot** (`computeSnapshot()` is a faithful port of App.jsx profit/bank/margin math — keep in sync). Secrets via `wrangler secret put`: `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` (guards the `/?token=…[&send=1]` manual preview/send endpoint). Sender `reminders@mail.raltech.dev` (domain `mail.raltech.dev` verified in the Resend account revenueautomationlab@gmail.com; see worker README).
-
 ### Roles, Audit & Admin (multi-user)
 - **Roles**: `app_users` (email → `reader`|`full`, status). `revenueautomationlab@gmail.com` is hard-coded to `admin` in `app_user_role()` (never lockable-out). Helpers `app_can_read()` / `app_can_write()` / `app_is_admin()`. **Role-aware RLS + audit on all data tables** (now 17, incl. `secret_investment_transfers`; reader = SELECT only; full = read/write/delete; admin = all). `service_role` (workers) bypasses RLS.
 - **TODO (backup/restore gap):** `db_snapshots` + `restore_snapshot()` still cover the original 16 business tables — `secret_investment_transfers` and `partners` are not yet backed up/restored (they survive a restore untouched). Add them to the snapshot list + `restore_snapshot` RPC when convenient.
@@ -264,5 +256,4 @@ Cloudflare Worker, cron `0 5 * * *` (08:00 Asia/Bahrain). Reads the DB with the 
 - **Always update memory files** in the memory directory when learning new project context
 - **DB changes** always go through migration files — never modify the DB directly
 - **Keep Supabase free tier alive** via the Cloudflare Worker at `cloudflare/keep-alive/` (deploy with `npx wrangler deploy` from that dir)
-- **Daily brief email** worker at `cloudflare/daily-brief/` — deploy with `npx wrangler deploy`; needs secrets `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `TRIGGER_TOKEN` set via `wrangler secret put` (never commit them). If App.jsx profit/bank formulas change, update the worker's `computeSnapshot()` to match.
 - Supabase project ref: `mssxrafomjlzoypjvjdu`

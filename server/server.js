@@ -17,6 +17,8 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const OWNER_EMAIL = 'revenueautomationlab@gmail.com'; // always admin, same as public.app_user_role()
 const ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://finance.raltech.dev,http://localhost:5173')
   .split(',').map((s) => s.trim()).filter(Boolean);
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const MAIL_FROM = process.env.MAIL_FROM || 'RAL Finance <reminders@mail.raltech.dev>';
 const TOKEN_TTL = 12 * 3600;
 const MAX_BODY = 2 * 1024 * 1024;
 if (JWT_SECRET.length < 32) { console.error('JWT_SECRET missing or too short'); process.exit(1); }
@@ -178,7 +180,7 @@ async function revertAudit(db, id) {
   return (await db.query('update public.audit_log set reverted_at = now() where id = $1 returning *', [id])).rows[0];
 }
 
-// Snapshots: same 16 tables and JSON shape the daily-brief Worker used to write via PostgREST,
+// Snapshots: same 16 tables and JSON shape the retired Cloudflare Worker used to write via PostgREST,
 // read from the live VPS DB. Last 30 kept. restore_snapshot() (plpgsql, imported with the schema)
 // deletes and re-inserts those tables; it runs inside the caller's transaction.
 const SNAP_TABLES = [
@@ -229,8 +231,6 @@ async function route(req, url, body) {
     if (!role || !READ_ROLES.has(role)) throw new HttpError(403, 'access revoked');
     const needWrite = () => { if (!WRITE_ROLES.has(role)) throw new HttpError(403, 'read-only user'); };
     const needAdmin = () => { if (role !== 'admin') throw new HttpError(403, 'admin only'); };
-    // Service token (daily-brief Worker): HS256 JWT with svc=true, minted with JWT_SECRET.
-    const needSvc = () => { if (claims.svc !== true) throw new HttpError(403, 'service token only'); };
 
     if (m === 'GET' && path === '/auth/me') return { email, role };
     if (m === 'GET' && path === '/state') return readState(db);
@@ -281,11 +281,8 @@ async function route(req, url, body) {
           if (!s) throw new HttpError(404, 'snapshot not found');
           return s;
         }
-        // Create from live data. Only the service token may set created_by (e.g. "cron").
-        if (m === 'POST' && seg.length === 2) {
-          const by = claims.svc === true && body && body.by ? String(body.by) : email;
-          return takeSnapshot(db, by);
-        }
+        // Create from live data (the daily "cron" snapshot is taken in-process, see dailySnapshot).
+        if (m === 'POST' && seg.length === 2) return takeSnapshot(db, email);
         // OTP-gated full restore, all in this one transaction: burn the code, safety snapshot, restore.
         if (m === 'POST' && seg.length === 4 && seg[3] === 'restore') {
           const code = String((body && body.code) || '');
@@ -301,22 +298,21 @@ async function route(req, url, body) {
           return { ok: true };
         }
       }
-      // Restore codes: the Worker generates and emails the code, the API stores only its hash.
+      // Restore code: generated here, only its hash is stored, the code is emailed to the owner.
       if (seg[1] === 'otp' && m === 'POST' && seg.length === 2) {
-        needSvc();
-        const hash = String((body && body.code_hash) || '');
-        if (!/^[0-9a-f]{64}$/.test(hash)) throw new HttpError(400, 'code_hash required');
-        await db.query("insert into public.admin_otp (code_hash, purpose, expires_at) values ($1, 'restore', now() + interval '10 minutes')", [hash]);
+        const code = String(crypto.randomInt(100000, 1000000));
+        await db.query("insert into public.admin_otp (code_hash, purpose, expires_at) values ($1, 'restore', now() + interval '10 minutes')", [sha256hex(code)]);
+        await sendEmail(OWNER_EMAIL, otpEmail(code));
         return { ok: true };
       }
-      // Resend quota counters from send responses (Worker only).
-      if (seg[1] === 'email-quota' && m === 'PUT' && seg.length === 2) {
-        needSvc();
-        const n = (v) => (Number.isFinite(Number(v)) && v !== null ? Number(v) : null);
-        await db.query('insert into public.email_quota (id, daily_used, monthly_used, updated_at) values (1, $1, $2, now()) on conflict (id) do update set daily_used = excluded.daily_used, monthly_used = excluded.monthly_used, updated_at = now()',
-          [n(body && body.daily_used), n(body && body.monthly_used)]);
+      // Invite email to a newly added user (the row itself is created via /admin/users).
+      if (seg[1] === 'invite' && m === 'POST' && seg.length === 2) {
+        const to = String((body && body.email) || '').toLowerCase().trim();
+        if (!/^[^@\s]+@gmail\.com$/.test(to)) throw new HttpError(400, 'Must be a @gmail.com address');
+        await sendEmail(to, inviteEmail(to, (body && body.role) || 'reader', email));
         return { ok: true };
       }
+      if (seg[1] === 'email-usage' && m === 'GET' && seg.length === 2) return resendUsage();
     }
     throw new HttpError(404, 'not found');
   });
@@ -359,6 +355,95 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(status, headers);
   res.end(JSON.stringify(payload === undefined ? null : payload));
 });
+
+
+// ---- Email (Resend): restore codes, invites, usage. Replaces the retired Cloudflare Worker. ----
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function sendEmail(to, { subject, html, text }) {
+  if (!RESEND_API_KEY) throw new HttpError(500, 'email not configured');
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json', 'User-Agent': 'ral-finance-api/1.0' },
+    body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, html, text }),
+  });
+  if (!r.ok) { console.error('resend send', r.status, (await r.text()).slice(0, 200)); throw new HttpError(502, 'email send failed'); }
+}
+function card(title, color, inner) {
+  return `<!DOCTYPE html><html><body style="margin:0;background:#f4f5f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:16px 0;"><tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#fff;border-radius:14px;overflow:hidden;">
+<tr><td style="background:${color};padding:20px;font:700 18px Arial,sans-serif;color:#fff;">${title}</td></tr>
+<tr><td style="padding:20px;font:400 15px/1.6 Arial,sans-serif;color:#1f2937;">${inner}</td></tr>
+</table></td></tr></table></body></html>`;
+}
+function otpEmail(code) {
+  return {
+    subject: `RAL Finance restore code: ${code}`,
+    html: card('Database restore confirmation', '#dc2626', `<p style="color:#6b7280;">Enter this code in the admin panel to confirm restoring a backup. It expires in 10 minutes.</p>
+<div style="font:800 40px/1.2 monospace;letter-spacing:6px;text-align:center;">${code}</div>
+<p style="color:#6b7280;font-size:12px;">If you did not request a restore, ignore this email. Nothing will change.</p>`),
+    text: `RAL Finance restore code: ${code} (expires in 10 minutes). Ignore if you did not request a restore.`,
+  };
+}
+function inviteEmail(to, role, invitedBy) {
+  const label = role === 'admin' ? 'Admin (full access + manage users)' : role === 'full' ? 'Full (add, edit, delete)' : 'Reader (view only)';
+  return {
+    subject: "You've been added to RAL Finance",
+    html: card('RAL Finance: access granted', '#1e40af', `<p>You have been given access to RAL Finance as <b>${label}</b>.</p>
+<ol style="padding-left:18px;color:#6b7280;"><li>Open <a href="https://finance.raltech.dev">finance.raltech.dev</a></li><li>Click <b>Sign in with Google</b></li><li>Use this Google account (${escHtml(to)}). Access is tied to this exact email.</li></ol>
+<p style="font-size:12px;color:#6b7280;">Added by ${escHtml(invitedBy)}. If you did not expect this, you can ignore it.</p>`),
+    text: `You've been added to RAL Finance as ${label}. Sign in at https://finance.raltech.dev with Google using ${to}. Added by ${invitedBy}.`,
+  };
+}
+// Live usage from Resend's list API, counted per recipient on UTC day/month boundaries (matches its dashboard).
+async function resendUsage() {
+  if (!RESEND_API_KEY) throw new HttpError(500, 'email not configured');
+  const dailyLimit = Number(process.env.RESEND_DAILY_LIMIT) || 100;
+  const monthlyLimit = Number(process.env.RESEND_MONTHLY_LIMIT) || 3000;
+  const now = new Date();
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const parseTs = (s) => Date.parse(String(s).slice(0, 19).replace(' ', 'T') + 'Z');
+  const cnt = (x) => (Array.isArray(x) ? x.length : x ? 1 : 0);
+  let dailyUsed = 0, monthlyUsed = 0, after = null, pages = 0, capped = false;
+  while (pages < 35) {
+    pages += 1;
+    const u = new URL('https://api.resend.com/emails');
+    u.searchParams.set('limit', '100');
+    if (after) u.searchParams.set('after', after);
+    const r = await fetch(u, { headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'User-Agent': 'ral-finance-api/1.0' } });
+    if (!r.ok) { if (pages === 1) throw new HttpError(502, `resend list ${r.status}`); break; }
+    const page = await r.json();
+    const data = page.data || [];
+    if (!data.length) break;
+    let older = false;
+    for (const e of data) {
+      const t = parseTs(e.created_at);
+      if (Number.isNaN(t)) continue;
+      if (t >= monthStart) { const n = cnt(e.to) + cnt(e.cc) + cnt(e.bcc); monthlyUsed += n; if (t >= dayStart) dailyUsed += n; } else older = true;
+    }
+    after = data[data.length - 1].id;
+    if (older || !page.has_more) break;
+    if (pages >= 35) { capped = true; break; }
+    await new Promise((res) => setTimeout(res, 600)); // Resend allows 2 req/s
+  }
+  return { ok: true, dailyUsed, monthlyUsed, dailyLimit, monthlyLimit,
+    dailyRemaining: Math.max(0, dailyLimit - dailyUsed), monthlyRemaining: Math.max(0, monthlyLimit - monthlyUsed),
+    updatedAt: new Date().toISOString(), live: true, capped };
+}
+
+// Daily in-app snapshot (created_by "cron") at 05:00 UTC, once per UTC day. Was the Worker's cron.
+async function dailySnapshot() {
+  try {
+    if (new Date().getUTCHours() < 5) return;
+    const { rows } = await pool.query("select 1 from public.db_snapshots where created_by = 'cron' and created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc' limit 1");
+    if (rows.length) return;
+    await withTx(OWNER_EMAIL, (db) => takeSnapshot(db, 'cron'));
+    console.log('daily snapshot taken');
+  } catch (e) { console.error('daily snapshot failed', e.message); }
+}
+setInterval(dailySnapshot, 15 * 60 * 1000).unref();
+setTimeout(dailySnapshot, 60 * 1000).unref();
 
 server.listen(PORT, () => console.log(`ral-finance-api listening on ${PORT}`));
 const stop = () => server.close(() => pool.end().then(() => process.exit(0)));

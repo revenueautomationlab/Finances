@@ -1,22 +1,22 @@
 # HANDOFF: Finance on the VPS (cutover done 2026-11-17)
 
 ## State
-- LIVE: https://finance.raltech.dev (Pages build ccacbdb+) -> https://finance-api.raltech.dev (VPS /opt/ral-finance). LE cert valid to 2027-02-15.
-- Final sync 2026-11-17 08:21 UTC: Backup Database run 44045734331 -> build_sql.py -> load.sh. 23/23 tables match, 543 rows. Pre-sync VPS dump in /opt/ral-finance/backups/pre-final-sync-*.dump.
-- Daily-brief Worker deployed (FINANCE_API_URL var, FINANCE_API_TOKEN svc JWT, 1 year). Preview shows bank BHD 2,730.905. Fixed preheader bug (used missing totalPhysicalBank, showed BHD 0.000).
-- Supabase project + keep-alive Worker untouched (cold rollback).
+- LIVE: https://finance.raltech.dev (Cloudflare Pages, git-connected) -> https://finance-api.raltech.dev (VPS /opt/ral-finance). LE cert valid to 2027-02-15.
+- Final sync 2026-11-17: 23/23 tables match, 543 rows. Pre-sync dumps in /opt/ral-finance/backups/.
+- Daily brief REMOVED 2026-11-17: Worker deleted, folder gone, `svc` token path dropped from the API.
+- The API now sends the restore code (POST /admin/otp), invite emails (POST /admin/invite), serves Resend usage (GET /admin/email-usage) and takes the daily `cron` snapshot at 05:00 UTC in-process. Env RESEND_API_KEY in /opt/ral-finance/.env and .vps-creds.
+- Supabase project + keep-alive Worker untouched (cold rollback). Reminder email scheduled for 2026-11-24 09:00 Bahrain to retire them.
 
-## TLS fix
-Labels were fine. LE had rate-limited finance-api (5 failed authz before DNS existed). After the window passed, `docker restart ral-finance-api` re-triggered issuance. acme.json backup: /root/backups/acme/acme-202611170818.json.
-
-## E2E (headless Playwright, scratchpad e2e.py)
-- Login page renders, Google button, 0 console errors.
-- Admin JWT injected: all 11 pages render, bank BHD 2,730.905 present, 0 console errors.
-- API CRUD round trip on domains (create/patch/delete 200), audit rows INSERT/UPDATE/DELETE with actor.
-- Brief: preview only. `send=1` was NOT used because MAIL_CC adds a second recipient.
+## Stored items (no values here)
+| Item | Where |
+|---|---|
+| VPS SSH | `.vps-creds` (VPS_*), GH secrets VPS_HOST/VPS_USER/VPS_PASS, `custompc/.kvm-creds` |
+| DB passwords, JWT_SECRET, GOOGLE_CLIENT_ID, RESEND_API_KEY | VPS `/opt/ral-finance/.env` + `.vps-creds` |
+| Google client ID (SPA) | Pages env `VITE_GOOGLE_CLIENT_ID` |
+| Deploy steps | CLAUDE.md "VPS" section (`server/deploy/deploy.py deploy`) |
+| Backups | cron 03:45 `/opt/ral-finance/backup.sh` -> /opt/ral-finance/backups (restore check, 14 days); copy /root/backups/finance-db |
 
 ## Open
-1. Real Google sign-in by a human on finance.raltech.dev (GIS origins were just added; not testable headless).
-2. Optional: send a test brief to suhaibrajabo@gmail.com only (needs a to-override param or a temp MAIL_CC change).
-3. After a few weeks stable: retire keep-alive Worker, Supabase project, supabase-js dep and legacy migrate.yml.
-4. Re-mint FINANCE_API_TOKEN before 2027-11-17.
+1. Real Google sign-in by a human on finance.raltech.dev.
+2. Test "Send code" (restore OTP) and an invite from the Admin page once signed in.
+3. 2026-11-24: retire keep-alive Worker, Supabase project, SUPABASE_* GH secrets, backup.yml/migrate.yml, supabase-js dep.

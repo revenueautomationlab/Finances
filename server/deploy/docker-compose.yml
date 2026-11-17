@@ -59,6 +59,7 @@ services:
       DATABASE_URL: postgres://finance_app:${APP_DB_PASSWORD}@ral-finance-db:5432/finance
       JWT_SECRET: ${JWT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
       ALLOWED_ORIGINS: https://finance.raltech.dev,http://localhost:5173
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
