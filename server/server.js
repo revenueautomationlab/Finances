@@ -178,6 +178,29 @@ async function revertAudit(db, id) {
   return (await db.query('update public.audit_log set reverted_at = now() where id = $1 returning *', [id])).rows[0];
 }
 
+// Snapshots: same 16 tables and JSON shape the daily-brief Worker used to write via PostgREST,
+// read from the live VPS DB. Last 30 kept. restore_snapshot() (plpgsql, imported with the schema)
+// deletes and re-inserts those tables; it runs inside the caller's transaction.
+const SNAP_TABLES = [
+  'projects', 'payments', 'expenses', 'bank_spending', 'secret_investment_spending',
+  'partner_withdrawals', 'partner_dividends', 'budgets', 'budget_spending',
+  'recurring_revenue', 'recurring_expenses', 'recurring_revenue_payments',
+  'recurring_expense_payments', 'domains', 'payment_schedule', 'payment_schedule_payments',
+];
+async function takeSnapshot(db, by) {
+  const data = {}; const counts = {};
+  for (const t of SNAP_TABLES) {
+    const { rows } = await db.query(`select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) as r from public.${qi(t)} x`);
+    data[t] = rows[0].r; counts[t] = rows[0].r.length;
+  }
+  const { rows: [created] } = await db.query(
+    'insert into public.db_snapshots (created_by, row_counts, data) values ($1, $2, $3) returning id, created_at, created_by, row_counts',
+    [by, counts, data]);
+  await db.query('delete from public.db_snapshots where id not in (select id from public.db_snapshots order by created_at desc limit 30)');
+  return created;
+}
+const sha256hex = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+
 async function route(req, url, body) {
   const path = url.pathname.replace(/\/+$/, '') || '/';
   const seg = path.split('/').filter(Boolean).map(decodeURIComponent);
@@ -206,6 +229,8 @@ async function route(req, url, body) {
     if (!role || !READ_ROLES.has(role)) throw new HttpError(403, 'access revoked');
     const needWrite = () => { if (!WRITE_ROLES.has(role)) throw new HttpError(403, 'read-only user'); };
     const needAdmin = () => { if (role !== 'admin') throw new HttpError(403, 'admin only'); };
+    // Service token (daily-brief Worker): HS256 JWT with svc=true, minted with JWT_SECRET.
+    const needSvc = () => { if (claims.svc !== true) throw new HttpError(403, 'service token only'); };
 
     if (m === 'GET' && path === '/auth/me') return { email, role };
     if (m === 'GET' && path === '/state') return readState(db);
@@ -256,6 +281,41 @@ async function route(req, url, body) {
           if (!s) throw new HttpError(404, 'snapshot not found');
           return s;
         }
+        // Create from live data. Only the service token may set created_by (e.g. "cron").
+        if (m === 'POST' && seg.length === 2) {
+          const by = claims.svc === true && body && body.by ? String(body.by) : email;
+          return takeSnapshot(db, by);
+        }
+        // OTP-gated full restore, all in this one transaction: burn the code, safety snapshot, restore.
+        if (m === 'POST' && seg.length === 4 && seg[3] === 'restore') {
+          const code = String((body && body.code) || '');
+          if (!/^\d{6}$/.test(code)) throw new HttpError(400, 'code required');
+          const { rows: [otp] } = await db.query(
+            "update public.admin_otp set used = true where id = (select id from public.admin_otp where purpose = 'restore' and not used and code_hash = $1 and expires_at > now() order by id desc limit 1) returning id",
+            [sha256hex(code)]);
+          if (!otp) throw new HttpError(403, 'Invalid or expired code');
+          const { rows: [snap] } = await db.query('select id from public.db_snapshots where id = $1', [seg[2]]);
+          if (!snap) throw new HttpError(404, 'snapshot not found');
+          await takeSnapshot(db, `pre-restore safety (${email})`);
+          await db.query('select public.restore_snapshot($1)', [seg[2]]);
+          return { ok: true };
+        }
+      }
+      // Restore codes: the Worker generates and emails the code, the API stores only its hash.
+      if (seg[1] === 'otp' && m === 'POST' && seg.length === 2) {
+        needSvc();
+        const hash = String((body && body.code_hash) || '');
+        if (!/^[0-9a-f]{64}$/.test(hash)) throw new HttpError(400, 'code_hash required');
+        await db.query("insert into public.admin_otp (code_hash, purpose, expires_at) values ($1, 'restore', now() + interval '10 minutes')", [hash]);
+        return { ok: true };
+      }
+      // Resend quota counters from send responses (Worker only).
+      if (seg[1] === 'email-quota' && m === 'PUT' && seg.length === 2) {
+        needSvc();
+        const n = (v) => (Number.isFinite(Number(v)) && v !== null ? Number(v) : null);
+        await db.query('insert into public.email_quota (id, daily_used, monthly_used, updated_at) values (1, $1, $2, now()) on conflict (id) do update set daily_used = excluded.daily_used, monthly_used = excluded.monthly_used, updated_at = now()',
+          [n(body && body.daily_used), n(body && body.monthly_used)]);
+        return { ok: true };
       }
     }
     throw new HttpError(404, 'not found');
@@ -281,7 +341,7 @@ const server = http.createServer(async (req, res) => {
     Object.assign(headers, {
       'Access-Control-Allow-Origin': origin, Vary: 'Origin',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS', 'Access-Control-Max-Age': '600',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS', 'Access-Control-Max-Age': '600',
     });
   }
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); return res.end(); }

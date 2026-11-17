@@ -4,8 +4,9 @@
 # Resend API key — account: revenueautomationlab@gmail.com · verified domain: mail.raltech.dev
 RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
 
-# Supabase service_role key — project mssxrafomjlzoypjvjdu (server-side read, bypasses RLS)
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...service_role...
+# RAL Finance API: base URL + service JWT (HS256 with the API JWT_SECRET, email = owner, svc = true)
+FINANCE_API_URL=https://finance-api.raltech.dev
+FINANCE_API_TOKEN=eyJhbGci...service_jwt...
 
 # Guards the manual /preview + /send fetch endpoint
 TRIGGER_TOKEN=choose-a-random-string

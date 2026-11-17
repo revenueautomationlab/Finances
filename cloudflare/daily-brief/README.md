@@ -8,7 +8,7 @@ The email contains:
 2. **Yesterday's transactions** — payments, expenses, bank/budget/secret spending, withdrawals, dividends, recurring payments.
 3. **KPI snapshot** — true cash in bank, bank spendable, revenue, operating net, partner balances (mirrors the app's business logic).
 
-Reads Supabase server-side with the **service_role** key (bypasses RLS). Sends via **Resend**.
+Reads the RAL Finance API (`FINANCE_API_URL`, VPS) with a service JWT (`FINANCE_API_TOKEN`). Sends via **Resend**.
 
 ## Status (as of 2026-06-15)
 ✅ Worker **deployed** (`ral-finance-daily-brief`, cron `0 5 * * *`). Code + KPI math tested.
@@ -16,7 +16,7 @@ Reads Supabase server-side with the **service_role** key (bypasses RLS). Sends v
 ✅ `TRIGGER_TOKEN` secret set.
 ⏳ **Two secrets left** — until both are set the worker no-ops and the manual endpoint stays 403-locked:
 - [ ] `wrangler secret put RESEND_API_KEY`        (Resend → API Keys)
-- [ ] `wrangler secret put SUPABASE_SERVICE_ROLE_KEY`  (Supabase → Project Settings → API → service_role)
+- [ ] `wrangler secret put FINANCE_API_TOKEN`  (HS256 JWT signed with the API JWT_SECRET, payload email = owner, svc = true)
 - [ ] then send a test via the manual URL (setting a secret auto-redeploys — no separate deploy needed)
 
 ## One-time setup
@@ -27,7 +27,7 @@ The brief sends from `reminders@mail.raltech.dev`. `mail.raltech.dev` is already
 ### 2. Set secrets (never committed)
 From this directory:
 ```bash
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY   # Supabase → Project Settings → API → service_role
+npx wrangler secret put FINANCE_API_TOKEN           # service JWT for the RAL Finance API
 npx wrangler secret put RESEND_API_KEY              # Resend → API Keys
 npx wrangler secret put TRIGGER_TOKEN               # any random string; guards the manual test URL
 ```
