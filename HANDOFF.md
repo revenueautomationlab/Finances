@@ -14,9 +14,11 @@ VPS `/opt/ral-finance/`: ral-finance-db (postgres 16) + ral-finance-api (server/
 - Needs: `FINANCE_API_URL` (uncomment in wrangler.toml) and `wrangler secret put FINANCE_API_TOKEN` = HS256 JWT signed with the API `JWT_SECRET`, payload `{"email":"revenueautomationlab@gmail.com","iat":now,"exp":now+1y}` (owner email is always admin). Existing RESEND_API_KEY, TRIGGER_TOKEN stay.
 - Still on Supabase: snapshot, OTP, restore (db_snapshots/admin_otp/rpc restore_snapshot) and email_quota. Port before or at cutover, or snapshots will capture stale Supabase data.
 
+## Done 2026-11-17 (round 2)
+- GOOGLE_CLIENT_ID = 707921897300-8fcvnq...apps.googleusercontent.com (public; read from the Supabase /auth/v1/authorize redirect). Set in VPS `.env`, `.vps-creds`, and `.env.local` as VITE_GOOGLE_CLIENT_ID (note: `.env.local` is TRACKED in git despite the .gitignore line). api restarted: POST /auth/google junk -> 401.
+- Write test (domains table, HS256 JWT minted in the api container, run via `docker exec -i ral-finance-api node - < script`): create/patch 200, audit rows carry actor suhaibrajabo@gmail.com, revert 200 (name restored), delete 200, reader JWT write 403 / read 200. load.sh re-run: 23/23 tables identical to counts.tsv.
+
 ## Open / next
-1. DNS A `finance-api` -> 72.62.16.1 (proxy off) in raltech.dev; check /healthz + cert.
-2. GOOGLE_CLIENT_ID on the API (`/opt/ral-finance/.env`, restart api) and `VITE_GOOGLE_CLIENT_ID` in `.env.local` + Cloudflare Pages env, plus `VITE_API_URL` if not default.
-3. Google Cloud OAuth client: authorized JS origins https://finance.raltech.dev and http://localhost:5173; redirect URIs `<origin>/auth/callback` for the fallback.
-4. Important: the Pages deploy and the Worker deploy must go together. Once the SPA sends API JWTs, the current Worker (Supabase auth) rejects admin actions.
-5. Phase 3: E2E (login, every page, CRUD, totals parity bank BHD 2,730.905, audit revert, brief), final freeze + re-import + cutover.
+1. DNS (BLOCKED): Playwright MCP profile is locked by another session's MCP (node PID 17968, since 11 Nov). The storageState backup's Cloudflare session is expired and Google asks for the RAL password. Wrangler OAuth has no DNS scope; no CF API token on disk. Need: Suhaib adds A `finance-api` -> 72.62.16.1 (grey cloud), or frees the profile / gives a DNS-edit token. Then check https://finance-api.raltech.dev/healthz + LE cert.
+2. Google JS origins (BLOCKED, same login issue): GIS test (Playwright route on each origin) shows https://finance.raltech.dev AND http://localhost:5173 are NOT allowed for that client ("origin is not allowed", /gsi/button 403). Add both under Google Cloud > Credentials > that client > Authorized JavaScript origins. Server-side verify does not need them.
+3. Phase 2: frontend API client. Endpoints: GET /healthz, POST /auth/google {credential}, GET /auth/me, GET /state, GET|POST /tables/:t (?on_conflict=col for upsert), PATCH|DELETE /tables/:t/:id, admin: GET|POST /admin/users, PATCH|DELETE /admin/users/:email, GET /admin/audit?limit&table&since, POST /admin/audit/:id/revert, GET /admin/snapshots[/:id]. Snapshot create/restore and OTP still live in the daily-brief Worker (Supabase).

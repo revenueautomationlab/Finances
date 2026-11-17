@@ -18,7 +18,7 @@ Keep every row. Supabase stays untouched as the rollback until parity is proven.
 ## Phases
 | # | Phase | Status |
 |---|---|---|
-| 1 | Infra + schema + data import + backups on VPS (staging, no cutover) | done 2026-11-17 except DNS: ral-finance-db + ral-finance-api up in /opt/ral-finance, 23/23 tables row-count parity with the 2026-11-17 dump, backup.sh 03:45 cron + restore check ok, GH secrets VPS_*. Open: finance-api DNS record, GOOGLE_CLIENT_ID (see HANDOFF.md) |
+| 1 | Infra + schema + data import + backups on VPS (staging, no cutover) | done 2026-11-17 except DNS: ral-finance-db + ral-finance-api up in /opt/ral-finance, 23/23 tables row-count parity with the 2026-11-17 dump, backup.sh 03:45 cron + restore check ok, GH secrets VPS_*. GOOGLE_CLIENT_ID set, write path + audit + revert + reader 403 verified. Open: finance-api DNS record, Google JS origins (see HANDOFF.md) |
 | 2 | Frontend: replace supabaseService/AuthContext with API client; daily-brief Worker repointed | code done 2026-11-17, build passes; not deployed. Blocked on DNS + Google client ID for live test (see HANDOFF.md) |
 | 3 | E2E: login, every page, CRUD, totals parity (bank BHD 2,730.905), audit log + revert, brief; final freeze + re-import + cutover | todo |
 
