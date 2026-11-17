@@ -1,0 +1,33 @@
+name: Backup Database
+
+# Full dump (roles, schema, data) of the live Supabase DB, kept as a 90-day artifact.
+# Download: gh run download <run-id> -n finance-db-backup
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 0" # weekly, Sunday 02:00 UTC
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+      - name: Dump
+        run: |
+          mkdir -p backup
+          supabase db dump --linked -f backup/roles.sql --role-only
+          supabase db dump --linked -f backup/schema.sql
+          supabase db dump --linked -f backup/data.sql --data-only --use-copy
+          ls -la backup
+          test -s backup/schema.sql && test -s backup/data.sql
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finance-db-backup
+          path: backup/
+          retention-days: 90
