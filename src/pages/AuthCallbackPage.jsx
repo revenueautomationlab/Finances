@@ -1,28 +1,19 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext";
-import { supabase } from "../services/supabaseService";
+import { useAuth, readCallbackIdToken } from "../contexts/AuthContext";
 import { Loader2 } from "lucide-react";
 
 export default function AuthCallbackPage() {
   const navigate = useNavigate();
-  const { user, loading, error } = useAuth();
+  const { user, loading, error, completeSignIn } = useAuth();
 
-  // On mount, explicitly exchange the URL hash/code for a session
+  // On mount, hand the Google ID token from the redirect fallback (#id_token=...) to the API.
   useEffect(() => {
-    const handleCallback = async () => {
-      try {
-        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-        const queryParams = new URLSearchParams(window.location.search);
-
-        if (hashParams.get("access_token") || queryParams.get("code")) {
-          await supabase.auth.getSession();
-        }
-      } catch (err) {
-        console.error("Callback auth exchange failed:", err);
-      }
-    };
-    handleCallback();
+    const idToken = readCallbackIdToken();
+    window.history.replaceState(null, "", window.location.pathname);
+    if (idToken) completeSignIn(idToken);
+    else navigate("/login", { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

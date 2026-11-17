@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { supabase } from "../services/supabaseService";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  api, getToken, setToken, clearToken, isTokenValid, tokenExpiry, setUnauthorizedHandler,
+} from "../services/supabaseService";
 
 const AuthContext = createContext(null);
 
@@ -9,201 +11,188 @@ const AuthContext = createContext(null);
 // NEVER be reachable in the deployed app. Pairs with mock data in supabaseService.fetchState.
 export const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
 
-const ADMIN_EMAIL = "revenueautomationlab@gmail.com";
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const GSI_SRC = "https://accounts.google.com/gsi/client";
+const NONCE_KEY = "ral_finance_oauth_nonce";
+const DENIED = "Access denied. Ask the admin to add your Google account.";
 
-/**
- * Decide whether a signed-in session may use the app, and at what role.
- * - The admin email is always allowed (role "admin") — never lockable-out.
- * - Anyone else must have an active row in app_users (reader/full/admin).
- *
- * IMPORTANT: queries app_users with the SESSION'S OWN access token (direct REST), not the supabase
- * client. Right after the OAuth callback the client may not have attached the new session yet, so a
- * client query would run unauthenticated, the RLS "read own row" policy returns nothing, and the
- * user gets wrongly force-signed-out (logs in for a second, then bounced to /login). Using the
- * token explicitly removes that race entirely.
- */
-async function resolveAccess(session) {
-  const email = session?.user?.email;
-  if (!email) return { allowed: false, role: null };
-  if (email === ADMIN_EMAIL) return { allowed: true, role: "admin" };
-  const token = session?.access_token;
-  if (!token) return { allowed: false, role: null };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/app_users?select=role,status&email=eq.${encodeURIComponent(email)}`,
-        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` } },
-      );
-      if (res.ok) {
-        const rows = await res.json();
-        if (rows.length && rows[0].status === "active") return { allowed: true, role: rows[0].role };
-        if (rows.length) return { allowed: false, role: null }; // disabled → definitive
-        // empty with a valid token = genuinely not onboarded; brief retry guards against replica lag
-      }
-    } catch (err) {
-      console.error(`Role lookup failed (attempt ${attempt}):`, err);
-    }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
+// Load Google Identity Services once.
+let gsiPromise = null;
+function loadGsi() {
+  if (window.google?.accounts?.id) return Promise.resolve(window.google);
+  if (!gsiPromise) {
+    gsiPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = GSI_SRC;
+      s.async = true;
+      s.defer = true;
+      s.onload = () => (window.google?.accounts?.id ? resolve(window.google) : reject(new Error("Google sign-in failed to load")));
+      s.onerror = () => { gsiPromise = null; reject(new Error("Google sign-in failed to load")); };
+      document.head.appendChild(s);
+    });
   }
-  return { allowed: false, role: null };
+  return gsiPromise;
+}
+
+function randomNonce() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
- * Fully clear all Supabase auth state from browser storage.
- * supabase.auth.signOut() doesn't always remove localStorage keys
- * (e.g. when the token is already expired or revoked), so we
- * manually purge everything Supabase-related.
+ * Fallback when the GIS prompt cannot be shown (cooldown after a dismissal, third-party sign-in
+ * blocked, etc.): full-page Google OAuth with response_type=id_token, back to /auth/callback,
+ * where AuthCallbackPage hands the ID token to completeSignIn. Needs the callback URL listed as
+ * an authorized redirect URI on the OAuth client.
  */
-function clearSupabaseStorage() {
-  try {
-    // Clear all Supabase keys from localStorage
-    const localKeys = Object.keys(localStorage).filter(
-      (key) => key.startsWith("sb-") || key.includes("supabase"),
-    );
-    localKeys.forEach((key) => localStorage.removeItem(key));
-
-    // Clear all Supabase keys from sessionStorage
-    const sessionKeys = Object.keys(sessionStorage).filter(
-      (key) => key.startsWith("sb-") || key.includes("supabase"),
-    );
-    sessionKeys.forEach((key) => sessionStorage.removeItem(key));
-  } catch (err) {
-    console.error("Failed to clear Supabase storage:", err);
-  }
+export function redirectToGoogle() {
+  const nonce = randomNonce();
+  try { sessionStorage.setItem(NONCE_KEY, nonce); } catch { /* storage blocked */ }
+  const p = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: `${window.location.origin}/auth/callback`,
+    response_type: "id_token",
+    scope: "openid email profile",
+    prompt: "select_account",
+    nonce,
+  });
+  window.location.assign(`https://accounts.google.com/o/oauth2/v2/auth?${p}`);
 }
 
-/**
- * Sign out and nuke every trace of the session so the user
- * lands on a completely clean login page.
- */
-async function forceFullSignOut() {
+/** Reads #id_token from the callback URL (checks the nonce we sent). Returns null if absent. */
+export function readCallbackIdToken() {
+  const hash = new URLSearchParams(window.location.hash.substring(1));
+  const idToken = hash.get("id_token");
+  if (!idToken) return null;
+  let expected = null;
+  try { expected = sessionStorage.getItem(NONCE_KEY); sessionStorage.removeItem(NONCE_KEY); } catch { /* ignore */ }
   try {
-    // "local" scope: sign out ONLY this device/browser. Using "global" (the default) would
-    // revoke the user's sessions on every device — which logged people out when switching
-    // accounts and broke multi-device use. Local + the storage purge below is enough to
-    // cleanly swap accounts here.
-    await supabase.auth.signOut({ scope: "local" });
-  } catch (err) {
-    // Ignore errors — the session may already be invalid
-    console.warn("signOut threw (safe to ignore):", err);
-  }
-  clearSupabaseStorage();
+    const claims = JSON.parse(atob(idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    if (!expected || claims.nonce !== expected) return null;
+  } catch { return null; }
+  return idToken;
 }
 
 export function AuthProvider({ children }) {
-  // Dev bypass: start as a fake admin and skip all Supabase auth. Hooks stay unconditional
+  // Dev bypass: start as a fake admin and skip all auth. Hooks stay unconditional
   // (order never changes) so React Fast Refresh doesn't choke during local dev.
   const [user, setUser] = useState(DEV_AUTH_BYPASS ? { email: "dev-local@bypass" } : null);
   const [role, setRole] = useState(DEV_AUTH_BYPASS ? "admin" : null);
   const [loading, setLoading] = useState(!DEV_AUTH_BYPASS);
   const [error, setError] = useState(null);
-  const isForceSigningOut = useRef(false);
+  const expiryTimer = useRef(null);
 
-  useEffect(() => {
-    if (DEV_AUTH_BYPASS) return undefined; // no Supabase session in bypass mode
-    let cancelled = false;
-
-    // Resolve a session to user+role and update state. NEVER call this synchronously inside
-    // onAuthStateChange — awaiting a DB query there deadlocks Supabase's auth lock (the
-    // "loads forever" bug). We always defer it.
-    const apply = async (session) => {
-      try {
-        if (session?.user) {
-          const { allowed, role: r } = await resolveAccess(session);
-          if (cancelled) return;
-          if (allowed) {
-            setUser(session.user);
-            setRole(r);
-            setError(null);
-          } else {
-            // Logged in but not onboarded / disabled — purge and kick to login.
-            isForceSigningOut.current = true;
-            await forceFullSignOut();
-            if (!cancelled) {
-              setError("Access denied. Ask the admin to add your Google account.");
-              setUser(null);
-              setRole(null);
-            }
-            isForceSigningOut.current = false;
-          }
-        } else {
-          if (cancelled) return;
-          setUser(null);
-          setRole(null);
-          if (!isForceSigningOut.current) setError(null);
-        }
-      } catch (err) {
-        console.error("Auth resolve failed:", err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    // Initial check (safe to await here — not inside the auth callback).
-    supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => apply(session))
-      .catch((err) => { console.error("getSession failed:", err); if (!cancelled) setLoading(false); });
-
-    // Auth changes: defer the (DB-touching) work out of the callback to avoid the lock deadlock.
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setTimeout(() => { if (!cancelled) apply(session); }, 0);
-    });
-
-    // Safety net: never leave the user stuck on the loading screen.
-    const safety = setTimeout(() => { if (!cancelled) setLoading(false); }, 8000);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(safety);
-      subscription?.unsubscribe();
-    };
+  const clearSession = useCallback((message = null) => {
+    clearToken();
+    if (expiryTimer.current) { clearTimeout(expiryTimer.current); expiryTimer.current = null; }
+    try { window.google?.accounts?.id?.disableAutoSelect(); } catch { /* not loaded */ }
+    setUser(null);
+    setRole(null);
+    setError(message);
   }, []);
 
-  const signInWithGoogle = async () => {
+  // Sign the user out a moment before the API JWT expires (it is not refreshable).
+  const scheduleExpiry = useCallback((token) => {
+    if (expiryTimer.current) clearTimeout(expiryTimer.current);
+    const ms = tokenExpiry(token) * 1000 - Date.now() - 30000;
+    expiryTimer.current = setTimeout(() => clearSession("Your session expired. Please sign in again."), Math.max(ms, 0));
+  }, [clearSession]);
+
+  // Any 401 from the API (or an expired token at request time) signs out.
+  useEffect(() => {
+    if (DEV_AUTH_BYPASS) return undefined;
+    setUnauthorizedHandler(() => clearSession("Your session expired. Please sign in again."));
+    return () => setUnauthorizedHandler(null);
+  }, [clearSession]);
+
+  // Restore a stored session: confirm the token and current role with GET /auth/me.
+  useEffect(() => {
+    if (DEV_AUTH_BYPASS) return undefined;
+    let cancelled = false;
+    const token = getToken();
+    if (!isTokenValid(token)) {
+      clearToken();
+      setLoading(false);
+      return undefined;
+    }
+    api("/auth/me")
+      .then((me) => {
+        if (cancelled) return;
+        setUser({ email: me.email });
+        setRole(me.role);
+        setError(null);
+        scheduleExpiry(token);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err.status === 403) clearSession(DENIED);
+        else if (err.status) clearSession(err.message);
+        else setError("Cannot reach the finance server. Check your connection and reload.");
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [clearSession, scheduleExpiry]);
+
+  useEffect(() => () => { if (expiryTimer.current) clearTimeout(expiryTimer.current); }, []);
+
+  /** Exchange a Google ID token for an API JWT (POST /auth/google). */
+  const completeSignIn = useCallback(async (credential) => {
+    setLoading(true);
     try {
+      const res = await api("/auth/google", { method: "POST", body: { credential }, auth: false });
+      setToken(res.token);
+      setUser({ email: res.email });
+      setRole(res.role);
       setError(null);
-      // Always purge any leftover session before starting a new sign-in
-      // This ensures a wrong-account denial doesn't stick around
-      await forceFullSignOut();
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-          queryParams: {
-            prompt: "select_account",
-          },
-        },
-      });
-      if (error) throw error;
+      scheduleExpiry(res.token);
+      return true;
     } catch (err) {
       console.error("Login error:", err);
-      setError(err.message);
+      clearSession(err.status === 403 ? DENIED : err.message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [clearSession, scheduleExpiry]);
+
+  const signInWithGoogle = async () => {
+    setError(null);
+    clearSession();
+    if (!GOOGLE_CLIENT_ID) {
+      setError("Google sign-in is not configured (VITE_GOOGLE_CLIENT_ID missing).");
+      return;
+    }
+    try {
+      const google = await loadGsi();
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (resp) => { if (resp?.credential) completeSignIn(resp.credential); },
+        auto_select: false,
+        cancel_on_tap_outside: true,
+        use_fedcm_for_prompt: true,
+      });
+      google.accounts.id.prompt((n) => {
+        // Prompt could not be shown (cooldown, blocked): fall back to the redirect flow.
+        // A user who closed it on purpose is left on the login page.
+        try {
+          const reason = n.isSkippedMoment?.() ? n.getSkippedReason?.() : null;
+          if (n.isNotDisplayed?.() || (reason && reason !== "user_cancel" && reason !== "tap_outside")) redirectToGoogle();
+        } catch { /* FedCM may not expose moment details */ }
+      });
+    } catch (err) {
+      console.error("Google sign-in unavailable, using redirect:", err);
+      redirectToGoogle();
     }
   };
 
   const signOut = async () => {
-    try {
-      setError(null);
-      await forceFullSignOut();
-      setUser(null);
-      setRole(null);
-    } catch (err) {
-      // Even if signOut fails, clear everything and reset state
-      clearSupabaseStorage();
-      setUser(null);
-      setRole(null);
-      console.warn("Logout error (session cleared anyway):", err);
-    }
+    clearSession();
   };
 
   return (
     <AuthContext.Provider
-      value={{ user, role, isAdmin: role === "admin", canWrite: role === "full" || role === "admin", loading, error, signInWithGoogle, signOut }}
+      value={{ user, role, isAdmin: role === "admin", canWrite: role === "full" || role === "admin", loading, error, signInWithGoogle, signOut, completeSignIn }}
     >
       {children}
     </AuthContext.Provider>

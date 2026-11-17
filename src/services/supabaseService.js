@@ -1,25 +1,71 @@
 /**
- * Updated backend API service for Supabase
- * Replace the db-plugin in vite.config.js with API calls to this service
+ * RAL Finance data layer: talks to the RAL Finance API on the VPS (server/server.js).
+ * Replaced supabase-js on 2026-11-17 (Phase 2 of the Supabase to VPS move). Every exported
+ * function keeps its old name, arguments and return shape so src/App.jsx is unchanged.
+ * Auth: the API JWT from POST /auth/google lives in localStorage (see AuthContext).
  */
 
-import { createClient } from "@supabase/supabase-js";
+export const API_URL = (import.meta.env.VITE_API_URL || "https://finance-api.raltech.dev").replace(/\/+$/, "");
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// ---------- token storage + 401 handling ----------
+const TOKEN_KEY = "ral_finance_api_token";
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error(
-    "Missing Supabase credentials. Please check your .env.local file.",
-  );
-  console.error("VITE_SUPABASE_URL:", SUPABASE_URL);
-  console.error("VITE_SUPABASE_ANON_KEY:", SUPABASE_ANON_KEY);
+export function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+export function setToken(token) {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* storage blocked */ }
+}
+export function clearToken() {
+  try { localStorage.removeItem(TOKEN_KEY); } catch { /* storage blocked */ }
+}
+/** Seconds since epoch when the token expires, or 0 if unreadable. */
+export function tokenExpiry(token) {
+  try {
+    const p = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return Number(p.exp) || 0;
+  } catch { return 0; }
+}
+export function isTokenValid(token) {
+  return !!token && tokenExpiry(token) > Date.now() / 1000 + 30;
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let unauthorizedHandler = null;
+/** AuthContext registers this so a 401 (or an expired token) signs the user out. */
+export function setUnauthorizedHandler(fn) { unauthorizedHandler = fn; }
+function unauthorized(msg) {
+  clearToken();
+  if (unauthorizedHandler) unauthorizedHandler(msg);
+  return new Error(msg || "Session expired, please sign in again");
+}
 
-// Export supabase instance for use in other modules (like AuthContext)
-export { supabase };
+/** fetch wrapper: JSON in/out, bearer token, errors thrown as Error(message) like supabase-js. */
+export async function api(path, { method = "GET", body, auth = true } = {}) {
+  const headers = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (auth) {
+    const token = getToken();
+    if (!isTokenValid(token)) throw unauthorized("Session expired, please sign in again");
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_URL}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const json = await res.json().catch(() => null);
+  if (res.status === 401 && auth) throw unauthorized(json?.error ? `Signed out: ${json.error}` : undefined);
+  if (!res.ok) {
+    const err = new Error(json?.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    if (json?.code) err.code = json.code;
+    throw err;
+  }
+  return json;
+}
+
+const enc = encodeURIComponent;
+const insert = async (table, row, onConflict) =>
+  (await api(`/tables/${table}${onConflict ? `?on_conflict=${enc(onConflict)}` : ""}`, { method: "POST", body: [row] }))[0];
+const update = (table, id, fields) => api(`/tables/${table}/${enc(id)}`, { method: "PATCH", body: fields });
+const remove = (table, id) => api(`/tables/${table}/${enc(id)}`, { method: "DELETE" });
+
 // DEV-ONLY: mock data for local layout/UI testing when auth is bypassed (see AuthContext).
 // Guarded by import.meta.env.DEV so the production build strips it entirely.
 const DEV_AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === "true";
@@ -69,39 +115,24 @@ function mockState() {
 export async function fetchState() {
   if (DEV_AUTH_BYPASS) return mockState();
   try {
-    const [
-      { data: projects },
-      { data: bankSpending },
-      { data: secretInvestmentSpending },
-      { data: partnerWithdrawals },
-      { data: partnerDividends },
-      { data: budgets },
-      { data: recurringRevenue },
-      { data: recurringExpenses },
-      { data: recurringRevenuePayments },
-      { data: recurringExpensePayments },
-      { data: domains },
-      { data: paymentSchedule },
-      { data: paymentSchedulePayments },
-      { data: secretInvestmentTransfers },
-      { data: partners },
-    ] = await Promise.all([
-      supabase.from("projects").select("*, payments(*), expenses(*)"),
-      supabase.from("bank_spending").select("*"),
-      supabase.from("secret_investment_spending").select("*"),
-      supabase.from("partner_withdrawals").select("*"),
-      supabase.from("partner_dividends").select("*"),
-      supabase.from("budgets").select("*, budget_spending(*)"),
-      supabase.from("recurring_revenue").select("*"),
-      supabase.from("recurring_expenses").select("*"),
-      supabase.from("recurring_revenue_payments").select("*"),
-      supabase.from("recurring_expense_payments").select("*"),
-      supabase.from("domains").select("*"),
-      supabase.from("payment_schedule").select("*"),
-      supabase.from("payment_schedule_payments").select("*"),
-      supabase.from("secret_investment_transfers").select("*"),
-      supabase.from("partners").select("*"),
-    ]);
+    // GET /state returns every business table keyed by table name; projects carry nested
+    // payments/expenses and budgets carry budget_spending (same shape the old selects produced).
+    const s = await api("/state");
+    const projects = s.projects || [];
+    const bankSpending = s.bank_spending;
+    const secretInvestmentSpending = s.secret_investment_spending;
+    const partnerWithdrawals = s.partner_withdrawals;
+    const partnerDividends = s.partner_dividends;
+    const budgets = s.budgets;
+    const recurringRevenue = s.recurring_revenue;
+    const recurringExpenses = s.recurring_expenses;
+    const recurringRevenuePayments = s.recurring_revenue_payments;
+    const recurringExpensePayments = s.recurring_expense_payments;
+    const domains = s.domains;
+    const paymentSchedule = s.payment_schedule;
+    const paymentSchedulePayments = s.payment_schedule_payments;
+    const secretInvestmentTransfers = s.secret_investment_transfers;
+    const partners = s.partners;
 
     const transformedProjects = projects.map((p) => ({
       id: p.id,
@@ -261,540 +292,144 @@ export async function fetchState() {
   }
 }
 
-// Save state (used for updates)
-export async function saveState(data) {
-  try {
-    // This function would handle bulk updates
-    // For now, individual operations are handled by specific functions below
-    return { ok: true };
-  } catch (error) {
-    console.error("Error saving state:", error);
-    throw error;
-  }
+// Save state (kept for API compatibility; individual operations below do the writes)
+export async function saveState() {
+  return { ok: true };
 }
 
 // Project operations
-export async function addProject(name, totalValue) {
-  const { data, error } = await supabase
-    .from("projects")
-    .insert([
-      {
-        id: generateId(),
-        name,
-        total_value: totalValue,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function updateProject(id, name, totalValue) {
-  const { error } = await supabase
-    .from("projects")
-    .update({ name, total_value: totalValue })
-    .eq("id", id);
-
-  if (error) throw error;
-}
-
-export async function deleteProject(id) {
-  const { error } = await supabase.from("projects").delete().eq("id", id);
-
-  if (error) throw error;
-}
+export const addProject = (name, totalValue) =>
+  insert("projects", { id: generateId(), name, total_value: totalValue });
+export async function updateProject(id, name, totalValue) { await update("projects", id, { name, total_value: totalValue }); }
+export async function deleteProject(id) { await remove("projects", id); }
 
 // Payment operations
-export async function addPayment(projectId, amount, date, note) {
-  const { data, error } = await supabase
-    .from("payments")
-    .insert([
-      {
-        id: generateId(),
-        project_id: projectId,
-        amount,
-        date,
-        note,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deletePayment(projectId, paymentId) {
-  const { error } = await supabase
-    .from("payments")
-    .delete()
-    .eq("id", paymentId);
-
-  if (error) throw error;
-}
+export const addPayment = (projectId, amount, date, note) =>
+  insert("payments", { id: generateId(), project_id: projectId, amount, date, note });
+export async function deletePayment(projectId, paymentId) { await remove("payments", paymentId); }
 
 // Expense operations
-export async function addExpense(projectId, amount, date, description) {
-  const { data, error } = await supabase
-    .from("expenses")
-    .insert([
-      {
-        id: generateId(),
-        project_id: projectId,
-        amount,
-        date,
-        description,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteExpense(projectId, expenseId) {
-  const { error } = await supabase
-    .from("expenses")
-    .delete()
-    .eq("id", expenseId);
-
-  if (error) throw error;
-}
+export const addExpense = (projectId, amount, date, description) =>
+  insert("expenses", { id: generateId(), project_id: projectId, amount, date, description });
+export async function deleteExpense(projectId, expenseId) { await remove("expenses", expenseId); }
 
 // Bank spending operations
-export async function addBankSpending(amount, date, description) {
-  const { data, error } = await supabase
-    .from("bank_spending")
-    .insert([
-      {
-        id: generateId(),
-        amount,
-        date,
-        description,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteBankSpending(id) {
-  const { error } = await supabase.from("bank_spending").delete().eq("id", id);
-
-  if (error) throw error;
-}
+export const addBankSpending = (amount, date, description) =>
+  insert("bank_spending", { id: generateId(), amount, date, description });
+export async function deleteBankSpending(id) { await remove("bank_spending", id); }
 
 // Secret investment spending operations
-export async function addSecretInvestmentSpending(amount, date, description) {
-  const { data, error } = await supabase
-    .from("secret_investment_spending")
-    .insert([
-      {
-        id: generateId(),
-        amount,
-        date,
-        description,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteSecretInvestmentSpending(id) {
-  const { error } = await supabase
-    .from("secret_investment_spending")
-    .delete()
-    .eq("id", id);
-
-  if (error) throw error;
-}
+export const addSecretInvestmentSpending = (amount, date, description) =>
+  insert("secret_investment_spending", { id: generateId(), amount, date, description });
+export async function deleteSecretInvestmentSpending(id) { await remove("secret_investment_spending", id); }
 
 // Yearly secret-investment transfers (25% of a year's net profit, physically moved out).
-export async function addSecretInvestmentTransfer(year, amount, movedDate, note) {
-  const { data, error } = await supabase
-    .from("secret_investment_transfers")
-    .insert([{ id: generateId(), year, amount, moved_date: movedDate, note: note || null }])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
+export const addSecretInvestmentTransfer = (year, amount, movedDate, note) =>
+  insert("secret_investment_transfers", { id: generateId(), year, amount, moved_date: movedDate, note: note || null });
+export async function deleteSecretInvestmentTransfer(id) { await remove("secret_investment_transfers", id); }
 
-export async function deleteSecretInvestmentTransfer(id) {
-  const { error } = await supabase.from("secret_investment_transfers").delete().eq("id", id);
-  if (error) throw error;
-}
-
-// Partner vesting: set/change/clear a partner's vesting start date (rows are seeded,
-// upsert covers a missing row just in case).
+// Partner vesting: set/change/clear a partner's vesting start date (upsert on partner_name).
 export async function setPartnerVestingStart(partnerName, startDate) {
-  const { error } = await supabase
-    .from("partners")
-    .upsert({ id: `partner_${partnerName}`, partner_name: partnerName, vesting_start: startDate || null }, { onConflict: "partner_name" });
-  if (error) throw error;
+  await insert("partners", { id: `partner_${partnerName}`, partner_name: partnerName, vesting_start: startDate || null }, "partner_name");
 }
 
 // Partner withdrawal operations
-export async function addPartnerWithdrawal(partnerName, amount, date, note) {
-  const { data, error } = await supabase
-    .from("partner_withdrawals")
-    .insert([
-      {
-        id: generateId(),
-        partner_name: partnerName,
-        amount,
-        date,
-        note: note || null,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deletePartnerWithdrawal(id) {
-  const { error } = await supabase
-    .from("partner_withdrawals")
-    .delete()
-    .eq("id", id);
-
-  if (error) throw error;
-}
+export const addPartnerWithdrawal = (partnerName, amount, date, note) =>
+  insert("partner_withdrawals", { id: generateId(), partner_name: partnerName, amount, date, note: note || null });
+export async function deletePartnerWithdrawal(id) { await remove("partner_withdrawals", id); }
 
 // Budget operations
-export async function addBudget(name, allocatedAmount, description) {
-  const { data, error } = await supabase
-    .from("budgets")
-    .insert([
-      {
-        id: generateId(),
-        name,
-        allocated_amount: allocatedAmount,
-        description: description || null,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
+export const addBudget = (name, allocatedAmount, description) =>
+  insert("budgets", { id: generateId(), name, allocated_amount: allocatedAmount, description: description || null });
 export async function updateBudget(id, name, allocatedAmount, description) {
-  const { error } = await supabase
-    .from("budgets")
-    .update({ name, allocated_amount: allocatedAmount, description: description || null })
-    .eq("id", id);
-
-  if (error) throw error;
+  await update("budgets", id, { name, allocated_amount: allocatedAmount, description: description || null });
 }
-
-export async function deleteBudget(id) {
-  const { error } = await supabase.from("budgets").delete().eq("id", id);
-
-  if (error) throw error;
-}
+export async function deleteBudget(id) { await remove("budgets", id); }
 
 // Budget spending operations
-export async function addBudgetSpending(budgetId, amount, date, description) {
-  const { data, error } = await supabase
-    .from("budget_spending")
-    .insert([
-      {
-        id: generateId(),
-        budget_id: budgetId,
-        amount,
-        date,
-        description,
-      },
-    ])
-    .select();
+export const addBudgetSpending = (budgetId, amount, date, description) =>
+  insert("budget_spending", { id: generateId(), budget_id: budgetId, amount, date, description });
+export async function deleteBudgetSpending(id) { await remove("budget_spending", id); }
 
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteBudgetSpending(id) {
-  const { error } = await supabase
-    .from("budget_spending")
-    .delete()
-    .eq("id", id);
-
-  if (error) throw error;
-}
-
-// Recurring revenue operations
-export async function addRecurringRevenue(projectId, amount, frequency, description, startDate, endDate) {
-  const { data, error } = await supabase
-    .from("recurring_revenue")
-    .insert([
-      {
-        id: generateId(),
-        project_id: projectId || null,
-        amount,
-        frequency,
-        description,
-        start_date: startDate || null,
-        next_due: startDate || null,
-        end_date: endDate || null,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function updateRecurringRevenue(id, projectId, amount, frequency, description, active, startDate, endDate) {
-  const update = { project_id: projectId || null, amount, frequency, description, active };
-  if (startDate !== undefined) { update.start_date = startDate || null; update.next_due = startDate || null; }
-  if (endDate !== undefined) { update.end_date = endDate || null; }
-  const { error } = await supabase.from("recurring_revenue").update(update).eq("id", id);
-  if (error) throw error;
-}
-
-export async function deleteRecurringRevenue(id) {
-  const { error } = await supabase.from("recurring_revenue").delete().eq("id", id);
-
-  if (error) throw error;
-}
-
-// Recurring expense operations
-export async function addRecurringExpense(projectId, amount, frequency, description, startDate, endDate) {
-  const { data, error } = await supabase
-    .from("recurring_expenses")
-    .insert([
-      {
-        id: generateId(),
-        project_id: projectId || null,
-        amount,
-        frequency,
-        description,
-        start_date: startDate || null,
-        next_due: startDate || null,
-        end_date: endDate || null,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function updateRecurringExpense(id, projectId, amount, frequency, description, active, startDate, endDate) {
-  const update = { project_id: projectId || null, amount, frequency, description, active };
-  if (startDate !== undefined) { update.start_date = startDate || null; update.next_due = startDate || null; }
-  if (endDate !== undefined) { update.end_date = endDate || null; }
-  const { error } = await supabase.from("recurring_expenses").update(update).eq("id", id);
-  if (error) throw error;
-}
-
-export async function deleteRecurringExpense(id) {
-  const { error } = await supabase.from("recurring_expenses").delete().eq("id", id);
-
-  if (error) throw error;
-}
+// Recurring revenue / expense operations
+const recurringRow = (projectId, amount, frequency, description, startDate, endDate) => ({
+  id: generateId(), project_id: projectId || null, amount, frequency, description,
+  start_date: startDate || null, next_due: startDate || null, end_date: endDate || null,
+});
+const recurringUpdate = (projectId, amount, frequency, description, active, startDate, endDate) => {
+  const u = { project_id: projectId || null, amount, frequency, description, active };
+  if (startDate !== undefined) { u.start_date = startDate || null; u.next_due = startDate || null; }
+  if (endDate !== undefined) { u.end_date = endDate || null; }
+  return u;
+};
+export const addRecurringRevenue = (...a) => insert("recurring_revenue", recurringRow(...a));
+export async function updateRecurringRevenue(id, ...a) { await update("recurring_revenue", id, recurringUpdate(...a)); }
+export async function deleteRecurringRevenue(id) { await remove("recurring_revenue", id); }
+export const addRecurringExpense = (...a) => insert("recurring_expenses", recurringRow(...a));
+export async function updateRecurringExpense(id, ...a) { await update("recurring_expenses", id, recurringUpdate(...a)); }
+export async function deleteRecurringExpense(id) { await remove("recurring_expenses", id); }
 
 // Partner dividend operations (bank-funded payouts)
-export async function addPartnerDividend(partnerName, amount, date, note) {
-  const { data, error } = await supabase
-    .from("partner_dividends")
-    .insert([
-      {
-        id: generateId(),
-        partner_name: partnerName,
-        amount,
-        date,
-        note: note || null,
-      },
-    ])
-    .select();
-
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deletePartnerDividend(id) {
-  const { error } = await supabase
-    .from("partner_dividends")
-    .delete()
-    .eq("id", id);
-
-  if (error) throw error;
-}
+export const addPartnerDividend = (partnerName, amount, date, note) =>
+  insert("partner_dividends", { id: generateId(), partner_name: partnerName, amount, date, note: note || null });
+export async function deletePartnerDividend(id) { await remove("partner_dividends", id); }
 
 // Domain operations
-export async function addDomain(name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) {
-  const { data, error } = await supabase
-    .from("domains")
-    .insert([
-      {
-        id: generateId(),
-        name,
-        expiry_date: expiryDate,
-        project_id: projectId || null,
-        recurring_revenue_id: recurringRevenueId || null,
-        registrar: registrar || null,
-        auto_renew: !!autoRenew,
-        renewal_cost: renewalCost || 0,
-        notes: notes || null,
-      },
-    ])
-    .select();
+const domainRow = (name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) => ({
+  name, expiry_date: expiryDate, project_id: projectId || null, recurring_revenue_id: recurringRevenueId || null,
+  registrar: registrar || null, auto_renew: !!autoRenew, renewal_cost: renewalCost || 0, notes: notes || null,
+});
+export const addDomain = (...a) => insert("domains", { id: generateId(), ...domainRow(...a) });
+export async function updateDomain(id, ...a) { await update("domains", id, domainRow(...a)); }
+export async function deleteDomain(id) { await remove("domains", id); }
 
-  if (error) throw error;
-  return data[0];
-}
-
-export async function updateDomain(id, name, expiryDate, projectId, recurringRevenueId, registrar, autoRenew, notes, renewalCost) {
-  const { error } = await supabase
-    .from("domains")
-    .update({
-      name,
-      expiry_date: expiryDate,
-      project_id: projectId || null,
-      recurring_revenue_id: recurringRevenueId || null,
-      registrar: registrar || null,
-      auto_renew: !!autoRenew,
-      renewal_cost: renewalCost || 0,
-      notes: notes || null,
-    })
-    .eq("id", id);
-
-  if (error) throw error;
-}
-
-export async function deleteDomain(id) {
-  const { error } = await supabase.from("domains").delete().eq("id", id);
-  if (error) throw error;
-}
-
-// Recurring revenue payment operations (project-linked period tracking)
-export async function addRecurringRevenuePayment(recurringRevenueId, projectId, periodDate, amount) {
-  const { data, error } = await supabase
-    .from("recurring_revenue_payments")
-    .insert([{ id: generateId(), recurring_revenue_id: recurringRevenueId, project_id: projectId, period_date: periodDate, amount }])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteRecurringRevenuePayment(id) {
-  const { error } = await supabase.from("recurring_revenue_payments").delete().eq("id", id);
-  if (error) throw error;
-}
-
-// Recurring expense payment operations (project-linked period tracking)
-export async function addRecurringExpensePayment(recurringExpenseId, projectId, periodDate, amount) {
-  const { data, error } = await supabase
-    .from("recurring_expense_payments")
-    .insert([{ id: generateId(), recurring_expense_id: recurringExpenseId, project_id: projectId, period_date: periodDate, amount }])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deleteRecurringExpensePayment(id) {
-  const { error } = await supabase.from("recurring_expense_payments").delete().eq("id", id);
-  if (error) throw error;
-}
+// Recurring revenue / expense payment operations (project-linked period tracking)
+export const addRecurringRevenuePayment = (recurringRevenueId, projectId, periodDate, amount) =>
+  insert("recurring_revenue_payments", { id: generateId(), recurring_revenue_id: recurringRevenueId, project_id: projectId, period_date: periodDate, amount });
+export async function deleteRecurringRevenuePayment(id) { await remove("recurring_revenue_payments", id); }
+export const addRecurringExpensePayment = (recurringExpenseId, projectId, periodDate, amount) =>
+  insert("recurring_expense_payments", { id: generateId(), recurring_expense_id: recurringExpenseId, project_id: projectId, period_date: periodDate, amount });
+export async function deleteRecurringExpensePayment(id) { await remove("recurring_expense_payments", id); }
 
 // Payment schedule operations (tracking-only; does NOT affect bank/money calcs)
-export async function addPaymentSchedule(direction, category, name, amount, frequency, startDate, endDate, projectId, notes) {
-  const { data, error } = await supabase
-    .from("payment_schedule")
-    .insert([
-      {
-        id: generateId(),
-        direction,
-        category,
-        name,
-        amount,
-        frequency,
-        start_date: startDate,
-        end_date: endDate || null,
-        project_id: projectId || null,
-        notes: notes || null,
-      },
-    ])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
-
+export const addPaymentSchedule = (direction, category, name, amount, frequency, startDate, endDate, projectId, notes) =>
+  insert("payment_schedule", {
+    id: generateId(), direction, category, name, amount, frequency, start_date: startDate,
+    end_date: endDate || null, project_id: projectId || null, notes: notes || null,
+  });
 export async function updatePaymentSchedule(id, direction, category, name, amount, frequency, startDate, endDate, projectId, active, notes) {
-  const update = { direction, category, name, amount, frequency, start_date: startDate, end_date: endDate || null, project_id: projectId || null, notes: notes || null };
-  if (active !== undefined) update.active = active;
-  const { error } = await supabase.from("payment_schedule").update(update).eq("id", id);
-  if (error) throw error;
+  const u = { direction, category, name, amount, frequency, start_date: startDate, end_date: endDate || null, project_id: projectId || null, notes: notes || null };
+  if (active !== undefined) u.active = active;
+  await update("payment_schedule", id, u);
 }
-
-export async function setPaymentScheduleActive(id, active) {
-  const { error } = await supabase.from("payment_schedule").update({ active }).eq("id", id);
-  if (error) throw error;
-}
-
-// Edit the going-forward expected amount for a schedule item (affects only future/unpaid
-// occurrences — already-paid occurrences keep their own captured amount).
-export async function setPaymentScheduleAmount(id, amount) {
-  const { error } = await supabase.from("payment_schedule").update({ amount }).eq("id", id);
-  if (error) throw error;
-}
-
-export async function deletePaymentSchedule(id) {
-  const { error } = await supabase.from("payment_schedule").delete().eq("id", id);
-  if (error) throw error;
-}
+export async function setPaymentScheduleActive(id, active) { await update("payment_schedule", id, { active }); }
+// Going-forward expected amount (already-paid occurrences keep their own captured amount).
+export async function setPaymentScheduleAmount(id, amount) { await update("payment_schedule", id, { amount }); }
+export async function deletePaymentSchedule(id) { await remove("payment_schedule", id); }
 
 // Mark a single due occurrence paid / unpaid (the "todo done" toggle)
-export async function addPaymentSchedulePayment(paymentScheduleId, periodDate, paidDate, note, amount) {
-  const { data, error } = await supabase
-    .from("payment_schedule_payments")
-    .insert([{ id: generateId(), payment_schedule_id: paymentScheduleId, period_date: periodDate, paid_date: paidDate || null, note: note || null, amount: amount == null ? null : amount }])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
-
-export async function deletePaymentSchedulePayment(id) {
-  const { error } = await supabase.from("payment_schedule_payments").delete().eq("id", id);
-  if (error) throw error;
-}
+export const addPaymentSchedulePayment = (paymentScheduleId, periodDate, paidDate, note, amount) =>
+  insert("payment_schedule_payments", {
+    id: generateId(), payment_schedule_id: paymentScheduleId, period_date: periodDate,
+    paid_date: paidDate || null, note: note || null, amount: amount == null ? null : amount,
+  });
+export async function deletePaymentSchedulePayment(id) { await remove("payment_schedule_payments", id); }
 
 // Admin: app users (roles) + audit log
 export async function fetchAppUsers() {
-  const { data, error } = await supabase.from("app_users").select("*").order("created_at", { ascending: true });
-  if (error) throw error;
+  const data = await api("/admin/users");
   return (data || []).map((u) => ({ email: u.email, role: u.role, status: u.status, invitedBy: u.invited_by, invitedAt: u.invited_at, createdAt: u.created_at }));
 }
-
-export async function addAppUser(email, role, invitedBy) {
-  const { data, error } = await supabase
-    .from("app_users")
-    .insert([{ email: email.toLowerCase().trim(), role, invited_by: invitedBy || null }])
-    .select();
-  if (error) throw error;
-  return data[0];
-}
-
-export async function updateAppUser(email, fields) {
-  const { error } = await supabase.from("app_users").update(fields).eq("email", email);
-  if (error) throw error;
-}
-
-export async function deleteAppUser(email) {
-  const { error } = await supabase.from("app_users").delete().eq("email", email);
-  if (error) throw error;
-}
+export const addAppUser = (email, role, invitedBy) =>
+  api("/admin/users", { method: "POST", body: { email: email.toLowerCase().trim(), role, invited_by: invitedBy || null } });
+export async function updateAppUser(email, fields) { await api(`/admin/users/${enc(email)}`, { method: "PATCH", body: fields }); }
+export async function deleteAppUser(email) { await api(`/admin/users/${enc(email)}`, { method: "DELETE" }); }
 
 export async function fetchAuditLog({ limit = 200, table = null, since = null } = {}) {
-  let q = supabase.from("audit_log").select("*").order("changed_at", { ascending: false }).limit(limit);
-  if (table) q = q.eq("table_name", table);
-  if (since) q = q.gte("changed_at", since);
-  const { data, error } = await q;
-  if (error) throw error;
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (table) q.set("table", table);
+  if (since) q.set("since", since);
+  const data = await api(`/admin/audit?${q}`);
   return (data || []).map((a) => ({
     id: a.id, tableName: a.table_name, rowId: a.row_id, action: a.action,
     actorEmail: a.actor_email, oldData: a.old_data, newData: a.new_data,
@@ -802,65 +437,24 @@ export async function fetchAuditLog({ limit = 200, table = null, since = null } 
   }));
 }
 
-// Revert a single audited change (admin only; RLS enforces). The revert is itself audited.
-// INSERT → delete the row · DELETE → re-insert the old row · UPDATE → restore old values.
+// Revert a single audited change (admin only). The API does the undo (INSERT: delete,
+// DELETE: re-insert, UPDATE: restore old values) and stamps reverted_at in one transaction.
 export async function applyAuditRevert(entry) {
-  const { tableName, action, rowId, oldData } = entry;
-  if (action === "INSERT") {
-    const { error } = await supabase.from(tableName).delete().eq("id", rowId);
-    if (error) throw error;
-  } else if (action === "DELETE") {
-    const { error } = await supabase.from(tableName).insert([oldData]);
-    if (error) throw error;
-  } else if (action === "UPDATE") {
-    const { error } = await supabase.from(tableName).update(oldData).eq("id", rowId);
-    if (error) throw error;
-  } else {
-    throw new Error(`Cannot revert action: ${action}`);
-  }
-  const { error: e2 } = await supabase.from("audit_log").update({ reverted_at: new Date().toISOString() }).eq("id", entry.id);
-  if (e2) throw e2;
+  await api(`/admin/audit/${enc(entry.id)}/revert`, { method: "POST", body: {} });
 }
 
-// Admin worker actions (invite email, OTP, snapshot, restore). Calls the secure Cloudflare
-// worker with the caller's Supabase JWT; the worker verifies admin + holds the service_role key.
+// Admin worker actions (invite email, OTP, snapshot, restore, Resend usage). The Cloudflare
+// worker verifies the caller's API JWT against GET /auth/me and checks role=admin.
 const ADMIN_WORKER_URL = "https://ral-finance-daily-brief.revenueautomationlab.workers.dev";
 async function adminAction(action, body) {
-  const post = async (token) => {
-    const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const json = await res.json().catch(() => ({}));
-    return { res, json };
-  };
-  const freshToken = async () => {
-    try {
-      const { data, error } = await supabase.auth.refreshSession();
-      if (!error && data?.session?.access_token) return data.session.access_token;
-    } catch (_) { /* refresh token invalid */ }
-    return null;
-  };
-
-  // Get a token, retrying getSession() (which auto-refreshes) to ride out the brief window right
-  // after a login/account-switch where the session isn't attached yet. Only fall back to an
-  // explicit refresh as a last resort (avoids racing the client's own auto-refresh).
-  let token = null;
-  for (let i = 0; i < 4 && !token; i += 1) {
-    const { data: { session } } = await supabase.auth.getSession();
-    token = session?.access_token || null;
-    if (!token && i < 3) await new Promise((r) => setTimeout(r, 400));
-  }
-  if (!token) token = await freshToken();
-  if (!token) throw new Error("Session expired — please sign out and sign in again");
-
-  // Canonical pattern (per Supabase docs): on a 401/403 refresh once and retry.
-  let { res, json } = await post(token);
-  if (res.status === 401 || res.status === 403) {
-    const t2 = await freshToken();
-    if (t2) ({ res, json } = await post(t2));
-  }
+  const token = getToken();
+  if (!isTokenValid(token)) throw unauthorized("Session expired, please sign in again");
+  const res = await fetch(`${ADMIN_WORKER_URL}/?action=${action}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.ok) throw new Error(json.error || `Request failed (${res.status})`);
   return json;
 }
@@ -871,15 +465,10 @@ export const takeSnapshotNow = () => adminAction("snapshot", {});
 export const fetchResendUsage = () => adminAction("resend-usage", {});
 
 export async function fetchSnapshots() {
-  const { data, error } = await supabase.from("db_snapshots").select("id,created_at,created_by,row_counts").order("created_at", { ascending: false });
-  if (error) throw error;
+  const data = await api("/admin/snapshots");
   return (data || []).map((s) => ({ id: s.id, createdAt: s.created_at, createdBy: s.created_by, rowCounts: s.row_counts || {} }));
 }
-export async function fetchSnapshotData(id) {
-  const { data, error } = await supabase.from("db_snapshots").select("data,created_at").eq("id", id).single();
-  if (error) throw error;
-  return data;
-}
+export const fetchSnapshotData = (id) => api(`/admin/snapshots/${enc(id)}`);
 
 // Utility function to generate IDs (same as in App.jsx)
 function generateId() {

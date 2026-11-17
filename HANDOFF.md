@@ -1,20 +1,22 @@
-# HANDOFF: Finance to VPS, Phase 1 (2026-11-17)
+# HANDOFF: Finance to VPS (2026-11-17, after Phase 2 code)
 
-## Done
-- VPS `/opt/ral-finance/`: docker-compose.yml (project `ral-finance`), `.env` (chmod 600), `ral-finance-db` (postgres:16-alpine, shared_buffers=64MB, internal network only, volume `ral-finance-pgdata`), `ral-finance-api` (node:22-alpine, pg only, Traefik router `ralfinance-api`, Host finance-api.raltech.dev, certresolver mytlschallenge).
-- Schema: `server/db/build_sql.py` turns the Supabase dump into plain SQL (`server/db/schema.sql` committed; data stays out of git in `server/db/out/`). No auth schema, RLS policies or anon/authenticated grants. `auth.jwt()->>'email'` replaced by `current_setting('app.user_email', true)` in `app_user_role()` and `audit_trigger()`.
-- Data: all public COPY blocks loaded with session_replication_role=replica (no audit rows created on import). API logs in as role `finance_app` (DML only).
-- Backups: `/opt/ral-finance/backup.sh`, root cron `45 3 * * *`, pg_dump -Fc + full restore check + 14 days, log `backups/backup.log`.
-- Secrets: `Finances/.vps-creds` (gitignored). GitHub secrets VPS_HOST/VPS_USER/VPS_PASS set on revenueautomationlab/Finances.
-- Deploy: `python server/deploy/deploy.py deploy` (also `run "<cmd>"`, `put`). Reload DB from fresh SQL: `/opt/ral-finance/load.sh` (drops VPS copy only).
+## Phase 1 (done, see git history for detail)
+VPS `/opt/ral-finance/`: ral-finance-db (postgres 16) + ral-finance-api (server/server.js) behind Traefik, Host finance-api.raltech.dev. 23/23 tables row parity, backup.sh 03:45 cron with restore check. Deploy: `python server/deploy/deploy.py deploy`. Creds: `.vps-creds` (gitignored).
 
-## Verified
-- Row counts: 23/23 tables match the dump exactly (543 rows; audit_log 391, projects 15, payments 22, expenses 17).
-- backup.sh: "restore check ok (23 tables, projects 15)". /healthz 200 inside container and via Traefik (curl --resolve). /state without token: 401.
-- RAM: db ~67 MiB, api ~13 MiB.
+## Phase 2 (code done, not deployed, not pushed)
+- `src/services/supabaseService.js`: no supabase-js. fetch to `VITE_API_URL` (default https://finance-api.raltech.dev). Same exports and return shapes; App.jsx unchanged. JWT in localStorage `ral_finance_api_token`; 401 or expired token clears it and signs out.
+- `src/contexts/AuthContext.jsx`: Google Identity Services prompt (`VITE_GOOGLE_CLIENT_ID`), ID token to POST /auth/google, role from GET /auth/me on reload, auto sign-out at JWT expiry (12 h). Same context shape plus `completeSignIn`. If the GIS prompt cannot show, falls back to a full-page Google redirect (response_type=id_token) to `/auth/callback`, which `AuthCallbackPage.jsx` now handles (nonce checked).
+- `@supabase/supabase-js` still in package.json (rollback) but nothing imports it; it is out of the bundle.
+- `npm run build` passes. Dev login page renders, no console errors. Live API not tested: finance-api.raltech.dev does not resolve yet.
+
+## Daily-brief Worker (prepared, NOT deployed)
+- Reads GET /state when `FINANCE_API_URL` var + `FINANCE_API_TOKEN` secret are set, else Supabase as before. Admin actions verify the caller via API GET /auth/me when `FINANCE_API_URL` is set.
+- Needs: `FINANCE_API_URL` (uncomment in wrangler.toml) and `wrangler secret put FINANCE_API_TOKEN` = HS256 JWT signed with the API `JWT_SECRET`, payload `{"email":"revenueautomationlab@gmail.com","iat":now,"exp":now+1y}` (owner email is always admin). Existing RESEND_API_KEY, TRIGGER_TOKEN stay.
+- Still on Supabase: snapshot, OTP, restore (db_snapshots/admin_otp/rpc restore_snapshot) and email_quota. Port before or at cutover, or snapshots will capture stale Supabase data.
 
 ## Open / next
-1. DNS: no Cloudflare token with DNS edit found locally (letterlock's CLOUDFLARE_API_TOKEN is only a GitHub secret; wrangler OAuth is zone:read). Add A `finance-api` -> 72.62.16.1, proxy OFF, in zone raltech.dev (dashboard via the saved Playwright profile, or a DNS-edit API token). Then confirm https://finance-api.raltech.dev/healthz is 200 with a valid Let's Encrypt cert (Traefik issues on first hit).
-2. GOOGLE_CLIENT_ID: not in the repo (Supabase holds it under Auth > Providers > Google, or Google Cloud console). Put it in `/opt/ral-finance/.env` and `.vps-creds`, then `docker compose up -d api`. Until set, POST /auth/google returns 503.
-3. Write-path smoke test (mint JWT, insert + revert, check audit actor) then re-run load.sh to restore parity.
-4. Phase 2: frontend API client. Endpoints: GET /healthz, POST /auth/google {credential}, GET /auth/me, GET /state, GET|POST /tables/:t (?on_conflict=col for upsert), PATCH|DELETE /tables/:t/:id, admin: GET|POST /admin/users, PATCH|DELETE /admin/users/:email, GET /admin/audit?limit&table&since, POST /admin/audit/:id/revert, GET /admin/snapshots[/:id]. Snapshot create/restore and OTP still live in the daily-brief Worker (Supabase).
+1. DNS A `finance-api` -> 72.62.16.1 (proxy off) in raltech.dev; check /healthz + cert.
+2. GOOGLE_CLIENT_ID on the API (`/opt/ral-finance/.env`, restart api) and `VITE_GOOGLE_CLIENT_ID` in `.env.local` + Cloudflare Pages env, plus `VITE_API_URL` if not default.
+3. Google Cloud OAuth client: authorized JS origins https://finance.raltech.dev and http://localhost:5173; redirect URIs `<origin>/auth/callback` for the fallback.
+4. Important: the Pages deploy and the Worker deploy must go together. Once the SPA sends API JWTs, the current Worker (Supabase auth) rejects admin actions.
+5. Phase 3: E2E (login, every page, CRUD, totals parity bank BHD 2,730.905, audit revert, brief), final freeze + re-import + cutover.
