@@ -18,9 +18,9 @@ Keep every row. Supabase stays untouched as the rollback until parity is proven.
 ## Phases
 | # | Phase | Status |
 |---|---|---|
-| 1 | Infra + schema + data import + backups on VPS (staging, no cutover) | done 2026-11-17 except DNS: ral-finance-db + ral-finance-api up in /opt/ral-finance, 23/23 tables row-count parity with the 2026-11-17 dump, backup.sh 03:45 cron + restore check ok, GH secrets VPS_*. GOOGLE_CLIENT_ID set, write path + audit + revert + reader 403 verified. Open: finance-api DNS record, Google JS origins (see HANDOFF.md) |
-| 2 | Frontend: replace supabaseService/AuthContext with API client; daily-brief Worker repointed | code done 2026-11-17, build passes; snapshots, OTP restore and email quota ported to the API (deployed, tested); Worker and Pages not deployed. Blocked on DNS + Google client ID for live test (see HANDOFF.md) |
-| 3 | E2E: login, every page, CRUD, totals parity (bank BHD 2,730.905), audit log + revert, brief; final freeze + re-import + cutover | todo |
+| 1 | Infra + schema + data import + backups on VPS (staging, no cutover) | done 2026-11-17 except DNS: ral-finance-db + ral-finance-api up in /opt/ral-finance, 23/23 tables row-count parity with the 2026-11-17 dump, backup.sh 03:45 cron + restore check ok, GH secrets VPS_*. GOOGLE_CLIENT_ID set, write path + audit + revert + reader 403 verified. DNS + Google JS origins done 2026-11-17 |
+| 2 | Frontend: replace supabaseService/AuthContext with API client; daily-brief Worker repointed | code done 2026-11-17, build passes; snapshots, OTP restore and email quota ported to the API (deployed, tested); deployed 2026-11-17 in Phase 3 |
+| 3 | E2E: login, every page, CRUD, totals parity (bank BHD 2,730.905), audit log + revert, brief; final freeze + re-import + cutover | done 2026-11-17: TLS live, final sync 23/23, Pages + Worker deployed, 11/11 pages, CRUD + audit pass. Open: human Google sign-in, Supabase retirement later (see HANDOFF.md) |
 
 ## Safety
 - Local backup: `C:\Users\Suhaib\Desktop\RAL\backups\finance-db\2026-11-17\`; VPS copy `/root/backups/finance-db/`.

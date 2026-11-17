@@ -5,8 +5,8 @@ Project finance tracker for Revenue Automation Lab (RAL). Tracks client projects
 
 ## Tech Stack
 - **Frontend**: React 18 + Vite 4 (vanilla JSX, no TypeScript)
-- **Database**: Supabase (PostgreSQL)
-- **Auth**: Google OAuth via Supabase Auth (restricted to `revenueautomationlab@gmail.com`)
+- **Database**: PostgreSQL 16 on the RAL VPS behind a small Node API (Supabase kept as cold rollback, see below)
+- **Auth**: Google Identity Services, verified by the API, which issues its own JWT (allowlist + roles in `app_users`)
 - **Routing**: react-router-dom v6
 - **Hosting**: Cloudflare Pages (`finance.raltech.dev`, also reachable at `ral-finance.pages.dev`)
 - **Currency**: BHD (Bahraini Dinar, 3 decimal places)
@@ -83,19 +83,23 @@ All tables have:
 - RLS enabled (authenticated users only)
 - Indexes on `project_id` and `date` columns where applicable
 
-## Where the data lives (verified 2026-11-17)
-- **Live DB = hosted Supabase cloud**, project ref `mssxrafomjlzoypjvjdu` (`https://mssxrafomjlzoypjvjdu.supabase.co`, account "revenueautomationlab's Project"). The production bundle on finance.raltech.dev (Cloudflare Pages) calls this URL; auth is Supabase Google OAuth.
-- **It is NOT on the VPS.** Every Postgres on the RAL VPS was checked on 2026-11-17 (jawhara, ral-crm, ral-newcrm, ralhr, aww, tajarub, onecli, host Postgres): none has the finance tables. What moved to the VPS was the **CRM** (off Supabase on 2026-10-16), not Finance.
-- Local `.env.development` points at the same live project. There is no DB password or service key locally: the service_role key exists only as a wrangler secret (daily-brief Worker), the access token only as GitHub secrets.
-- **Backups:** `.github/workflows/backup.yml` dumps `roles.sql`, `schema.sql`, `data.sql` weekly (Sun 02:00 UTC) and on demand (`gh workflow run backup.yml`), kept 90 days as artifact `finance-db-backup` (`gh run download <id> -n finance-db-backup`). Restore: `psql -f roles.sql`, then `schema.sql`, then `data.sql`.
-- Off-site copies of the 2026-11-17 dump: `C:\Users\Suhaib\Desktop\RAL\backups\finance-db\` and on the VPS at `/root/backups/finance-db/finance-db-2026-11-17.tgz`.
+## Where the data lives (cutover 2026-11-17)
+- **Live DB = the RAL VPS** (`72.62.16.1`), stack in `/opt/ral-finance/`: `ral-finance-db` (postgres:16-alpine, DB `finance`) + `ral-finance-api` (`server/server.js`, Node) behind Traefik at **https://finance-api.raltech.dev** (grey-cloud A record, Let's Encrypt TLS-ALPN cert, `/healthz`).
+- **SPA** (finance.raltech.dev, Cloudflare Pages project `ral-finance`, git-connected: a push to `main` runs `npm run build` and deploys) calls the API via `VITE_API_URL`. Pages Production env vars `VITE_API_URL` and `VITE_GOOGLE_CLIENT_ID` were set through the Cloudflare API (account `e403f22187e5205e7168efc70a31f4a3`). Rollback = Cloudflare dashboard > ral-finance > Deployments > previous build > Rollback.
+- **Auth:** Google Identity Services ID token -> `POST /auth/google` -> API HS256 JWT (12 h) in localStorage `ral_finance_api_token`; roles from `app_users`. Google client lives in GCP project "RAL Finance App" (JS origins finance.raltech.dev + localhost:5173, redirect `/auth/callback`).
+- **Daily-brief Worker** reads and writes only via the API: var `FINANCE_API_URL`, secret `FINANCE_API_TOKEN` (HS256 JWT `{svc:true}`, valid 1 year, minted with the API `JWT_SECRET`; re-mint before 2027-11-17). Manual preview: `/?token=<TRIGGER_TOKEN>` (`&send=1` mails MAIL_TO + MAIL_CC).
+- **Deploy API:** `python server/deploy/deploy.py deploy` (copies server/ and restarts only `ral-finance-api`). Ad hoc: `deploy.py run '<cmd>'`, `deploy.py put <local> <remote>` (in Git Bash set `MSYS_NO_PATHCONV=1`, or remote paths get mangled). Schema changes: apply SQL to the VPS DB (`docker exec -i ral-finance-db psql -U postgres -d finance`) and keep `server/db/schema.sql` in sync.
+- **Backups:** `/opt/ral-finance/backup.sh` nightly 03:45 (cron) with a restore check, dumps in `/opt/ral-finance/backups/`; in-app `db_snapshots` (last 30, cron + on demand, OTP-gated restore).
+- **Creds:** `.vps-creds` (gitignored: VPS SSH, JWT_SECRET, DB password, GOOGLE_CLIENT_ID, TRIGGER_TOKEN), VPS `/opt/ral-finance/.env`, GitHub secrets `VPS_*`. Never print them.
+- **Supabase = cold rollback only** (project `mssxrafomjlzoypjvjdu`, frozen at the 2026-11-17 final sync, 23/23 tables matched). The `keep-alive` Worker still pings it so it does not pause, and `backup.yml` still dumps it. Reload path: `gh workflow run "Backup Database"` -> download artifact -> `python server/db/build_sql.py <dir> server/db/out` -> put to `/opt/ral-finance/incoming/` -> `bash load.sh` (destructive for the VPS DB, back it up first).
+- Off-site copies of the 2026-11-17 dump: `C:\Users\Suhaib\Desktop\RAL\backups\finance-db\` and `/root/backups/finance-db/`.
 
-## RAL VPS (reference, if Finance is ever moved)
+## RAL VPS
 - Hostinger KVM 2, `srv1167964.hstgr.cloud`, IPv4 `72.62.16.1`, IPv6 `2a02:4780:28:e6c1::1`. It sits in Mohammed's Hostinger account, shared with the RAL account. Renewed 2026-11-17 for BHD 79.169/yr, paid until 2027-12-01.
 - SSH as root with a password: the creds are in `custompc/.kvm-creds` (gitignored) and used via `custompc/scripts/kvm.py`, and in the GitHub secrets `VPS_HOST`/`VPS_USER`/`VPS_PASS` in jawhara and CRM. The office IPv4 is blackholed to this /24, so use IPv6 (kvm.py falls back to it automatically).
 - Traefik (Let's Encrypt) fronts every site. Full map of apps and DBs on the box: `CRM/docs/newcrm/INFRA.md`.
 
-## Database Migrations (IMPORTANT)
+## Database Migrations (LEGACY: Supabase rollback project only since 2026-11-17)
 - **All DB changes go through migration files** in `supabase/migrations/`
 - Migration files use timestamp format: `YYYYMMDDHHMMSS_description.sql`
 - On push to `main`, GitHub Action auto-deploys new migrations via `supabase db push --include-all --yes`
