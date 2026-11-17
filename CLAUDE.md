@@ -83,6 +83,18 @@ All tables have:
 - RLS enabled (authenticated users only)
 - Indexes on `project_id` and `date` columns where applicable
 
+## Where the data lives (verified 2026-11-17)
+- **Live DB = hosted Supabase cloud**, project ref `mssxrafomjlzoypjvjdu` (`https://mssxrafomjlzoypjvjdu.supabase.co`, account "revenueautomationlab's Project"). The production bundle on finance.raltech.dev (Cloudflare Pages) calls this URL; auth is Supabase Google OAuth.
+- **It is NOT on the VPS.** Every Postgres on the RAL VPS was checked on 2026-11-17 (jawhara, ral-crm, ral-newcrm, ralhr, aww, tajarub, onecli, host Postgres): none has the finance tables. What moved to the VPS was the **CRM** (off Supabase on 2026-10-16), not Finance.
+- Local `.env.development` points at the same live project. There is no DB password or service key locally: the service_role key exists only as a wrangler secret (daily-brief Worker), the access token only as GitHub secrets.
+- **Backups:** `.github/workflows/backup.yml` dumps `roles.sql`, `schema.sql`, `data.sql` weekly (Sun 02:00 UTC) and on demand (`gh workflow run backup.yml`), kept 90 days as artifact `finance-db-backup` (`gh run download <id> -n finance-db-backup`). Restore: `psql -f roles.sql`, then `schema.sql`, then `data.sql`.
+- Off-site copies of the 2026-11-17 dump: `C:\Users\Suhaib\Desktop\RAL\backups\finance-db\` and on the VPS at `/root/backups/finance-db/finance-db-2026-11-17.tgz`.
+
+## RAL VPS (reference, if Finance is ever moved)
+- Hostinger KVM 2, `srv1167964.hstgr.cloud`, IPv4 `72.62.16.1`, IPv6 `2a02:4780:28:e6c1::1`. It sits in Mohammed's Hostinger account, shared with the RAL account. Renewed 2026-11-17 for BHD 79.169/yr, paid until 2027-12-01.
+- SSH as root with a password: the creds are in `custompc/.kvm-creds` (gitignored) and used via `custompc/scripts/kvm.py`, and in the GitHub secrets `VPS_HOST`/`VPS_USER`/`VPS_PASS` in jawhara and CRM. The office IPv4 is blackholed to this /24, so use IPv6 (kvm.py falls back to it automatically).
+- Traefik (Let's Encrypt) fronts every site. Full map of apps and DBs on the box: `CRM/docs/newcrm/INFRA.md`.
+
 ## Database Migrations (IMPORTANT)
 - **All DB changes go through migration files** in `supabase/migrations/`
 - Migration files use timestamp format: `YYYYMMDDHHMMSS_description.sql`
