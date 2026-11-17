@@ -24,3 +24,4 @@ supabase/.branches
 .vps-creds
 server/node_modules
 server/db/out/
+__pycache__/
