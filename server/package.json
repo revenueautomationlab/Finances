@@ -1,0 +1,10 @@
+{
+  "name": "ral-finance-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RAL Finance API on the VPS (replaces the Supabase data layer)",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "pg": "^8.13.1" }
+}

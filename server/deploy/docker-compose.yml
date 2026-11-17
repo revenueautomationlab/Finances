@@ -1,0 +1,97 @@
+# RAL Finance on the shared VPS: /opt/ral-finance/docker-compose.yml (copied by server/deploy/deploy.py).
+# Own compose project. Postgres has no published port (internal network only).
+# Routing + TLS = the shared Traefik on root_default, by container labels only.
+name: ral-finance
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ral-finance-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: finance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=20
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=192MB
+      - -c
+      - max_wal_size=256MB
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - jit=off
+    volumes:
+      - ral-finance-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finance -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 192m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks: [internal]
+
+  api:
+    build: ./app
+    image: ral-finance-api:latest
+    container_name: ral-finance-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://finance_app:${APP_DB_PASSWORD}@ral-finance-db:5432/finance
+      JWT_SECRET: ${JWT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      ALLOWED_ORIGINS: https://finance.raltech.dev,http://localhost:5173
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 128m
+    pids_limit: 64
+    read_only: true
+    tmpfs: ["/tmp:size=8m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks: [root_default, internal]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: root_default
+      traefik.http.routers.ralfinance-api.rule: Host(`finance-api.raltech.dev`)
+      traefik.http.routers.ralfinance-api.entrypoints: websecure
+      traefik.http.routers.ralfinance-api.tls: "true"
+      traefik.http.routers.ralfinance-api.tls.certresolver: mytlschallenge
+      traefik.http.services.ralfinance-api.loadbalancer.server.port: "3000"
+      traefik.http.middlewares.ralfinance-noindex.headers.customresponseheaders.X-Robots-Tag: noindex, nofollow
+      traefik.http.routers.ralfinance-api.middlewares: ralfinance-noindex
+
+volumes:
+  ral-finance-pgdata:
+
+networks:
+  root_default:
+    external: true
+  internal:
+    internal: true
