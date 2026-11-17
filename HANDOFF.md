@@ -9,10 +9,15 @@ VPS `/opt/ral-finance/`: ral-finance-db (postgres 16) + ral-finance-api (server/
 - `@supabase/supabase-js` still in package.json (rollback) but nothing imports it; it is out of the bundle.
 - `npm run build` passes. Dev login page renders, no console errors. Live API not tested: finance-api.raltech.dev does not resolve yet.
 
-## Daily-brief Worker (prepared, NOT deployed)
-- Reads GET /state when `FINANCE_API_URL` var + `FINANCE_API_TOKEN` secret are set, else Supabase as before. Admin actions verify the caller via API GET /auth/me when `FINANCE_API_URL` is set.
-- Needs: `FINANCE_API_URL` (uncomment in wrangler.toml) and `wrangler secret put FINANCE_API_TOKEN` = HS256 JWT signed with the API `JWT_SECRET`, payload `{"email":"revenueautomationlab@gmail.com","iat":now,"exp":now+1y}` (owner email is always admin). Existing RESEND_API_KEY, TRIGGER_TOKEN stay.
-- Still on Supabase: snapshot, OTP, restore (db_snapshots/admin_otp/rpc restore_snapshot) and email_quota. Port before or at cutover, or snapshots will capture stale Supabase data.
+## Daily-brief Worker (Supabase-free, NOT deployed)
+- All data via the API: GET /state, POST /admin/snapshots (cron, by="cron"), POST /admin/otp (stores code hash), PUT /admin/email-quota. Admin check = API GET /auth/me. Snapshot/restore actions forward the caller JWT to the API.
+- wrangler.toml now sets FINANCE_API_URL; SUPABASE_* vars removed. Needs `wrangler secret put FINANCE_API_TOKEN` = HS256 JWT (API JWT_SECRET), payload `{"email":"revenueautomationlab@gmail.com","svc":true,"iat":now,"exp":now+1y}`. svc=true is REQUIRED for /admin/otp and /admin/email-quota.
+- `cloudflare/keep-alive` still pings Supabase on purpose (keeps the rollback project awake); retire after cutover.
+
+## Done 2026-11-17 (round 3, snapshot/OTP/restore port)
+- API (deployed, only ral-finance-api restarted): snapshot create from live VPS data (last 30), restore = OTP burn + pre-restore safety snapshot + restore_snapshot() in ONE tx. SPA calls the API directly for snapshot and restore. Backup first: /opt/ral-finance/backups/pre-snapshot-port-202611170735.dump.
+- 15/15 tests pass in-container (scratch t.js, minted JWTs): create admin/svc, list, get (16 tables), OTP svc-only, wrong code 403, bad id 404 keeps code valid, restore undoes a PATCH, code single-use, safety snapshot, quota svc-only, /state. Real OTP email not sent (Worker not deployed). load.sh re-run after tests: 23/23 tables identical to server/db/out/counts.tsv, api healthy.
+- `npm run build` and `wrangler deploy --dry-run` pass.
 
 ## Done 2026-11-17 (round 2)
 - GOOGLE_CLIENT_ID = 707921897300-8fcvnq...apps.googleusercontent.com (public; read from the Supabase /auth/v1/authorize redirect). Set in VPS `.env`, `.vps-creds`, and `.env.local` as VITE_GOOGLE_CLIENT_ID (note: `.env.local` is TRACKED in git despite the .gitignore line). api restarted: POST /auth/google junk -> 401.
@@ -21,4 +26,4 @@ VPS `/opt/ral-finance/`: ral-finance-db (postgres 16) + ral-finance-api (server/
 ## Open / next
 1. DNS (BLOCKED): Playwright MCP profile is locked by another session's MCP (node PID 17968, since 11 Nov). The storageState backup's Cloudflare session is expired and Google asks for the RAL password. Wrangler OAuth has no DNS scope; no CF API token on disk. Need: Suhaib adds A `finance-api` -> 72.62.16.1 (grey cloud), or frees the profile / gives a DNS-edit token. Then check https://finance-api.raltech.dev/healthz + LE cert.
 2. Google JS origins (BLOCKED, same login issue): GIS test (Playwright route on each origin) shows https://finance.raltech.dev AND http://localhost:5173 are NOT allowed for that client ("origin is not allowed", /gsi/button 403). Add both under Google Cloud > Credentials > that client > Authorized JavaScript origins. Server-side verify does not need them.
-3. Phase 2: frontend API client. Endpoints: GET /healthz, POST /auth/google {credential}, GET /auth/me, GET /state, GET|POST /tables/:t (?on_conflict=col for upsert), PATCH|DELETE /tables/:t/:id, admin: GET|POST /admin/users, PATCH|DELETE /admin/users/:email, GET /admin/audit?limit&table&since, POST /admin/audit/:id/revert, GET /admin/snapshots[/:id]. Snapshot create/restore and OTP still live in the daily-brief Worker (Supabase).
+3. Phase 2: frontend API client. Endpoints: GET /healthz, POST /auth/google {credential}, GET /auth/me, GET /state, GET|POST /tables/:t (?on_conflict=col for upsert), PATCH|DELETE /tables/:t/:id, admin: GET|POST /admin/users, PATCH|DELETE /admin/users/:email, GET /admin/audit?limit&table&since, POST /admin/audit/:id/revert, GET /admin/snapshots[/:id]. Snapshots: GET|POST /admin/snapshots, GET /admin/snapshots/:id, POST /admin/snapshots/:id/restore {code}; svc only: POST /admin/otp, PUT /admin/email-quota.
